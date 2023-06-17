@@ -95,6 +95,8 @@ struct pkcs11_object_private {
 	EVP_PKEY *evp_key;
 	X509 *x509;
 	unsigned int forkid;
+	int refcnt;
+	pthread_mutex_t lock;
 };
 #define PRIVKEY(_key)		((PKCS11_OBJECT_private *) (_key)->_private)
 #define PRIVCERT(_cert)		((PKCS11_OBJECT_private *) (_cert)->_private)
@@ -239,9 +241,9 @@ extern int pkcs11_logout(PKCS11_SLOT_private *);
 /* Authenticate a private the key operation if needed */
 int pkcs11_authenticate(PKCS11_OBJECT_private *key, CK_SESSION_HANDLE session);
 
-/* Get a list of keys associated with this token */
+/* Get a list of keys matching with template associated with this token */
 extern int pkcs11_enumerate_keys(PKCS11_SLOT_private *, unsigned int type,
-	PKCS11_KEY **keys, unsigned int *nkeys);
+	const PKCS11_KEY *key_template, PKCS11_KEY **keys, unsigned int *nkeys);
 
 /* Create an object from a handle */
 extern PKCS11_OBJECT_private *pkcs11_object_from_handle(PKCS11_SLOT_private *slot,
@@ -254,6 +256,9 @@ extern PKCS11_OBJECT_private *pkcs11_object_from_template(PKCS11_SLOT_private *s
 /* Get the corresponding object (same ID, given different object type) */
 extern PKCS11_OBJECT_private *pkcs11_object_from_object(PKCS11_OBJECT_private *obj,
 	CK_SESSION_HANDLE session, CK_OBJECT_CLASS object_class);
+
+/* Reference the private object */
+extern PKCS11_OBJECT_private *pkcs11_object_ref(PKCS11_OBJECT_private *obj);
 
 /* Free an object */
 extern void pkcs11_object_free(PKCS11_OBJECT_private *obj);
@@ -270,9 +275,9 @@ extern PKCS11_CERT *pkcs11_find_certificate(PKCS11_OBJECT_private *key);
 /* Find the corresponding key (if any) */
 extern PKCS11_KEY *pkcs11_find_key(PKCS11_OBJECT_private *cert);
 
-/* Get a list of all certificates associated with this token */
+/* Get a list of all certificates matching with template associated with this token */
 extern int pkcs11_enumerate_certs(PKCS11_SLOT_private *,
-	PKCS11_CERT **certs, unsigned int *ncerts);
+	const PKCS11_CERT *cert_template, PKCS11_CERT **certs, unsigned int *ncerts);
 
 /* Remove an object from the token */
 extern int pkcs11_remove_object(PKCS11_OBJECT_private *object);
