@@ -104,6 +104,7 @@ static void dump_expiry(ENGINE_CTX *ctx, int level,
 
 	if (!cert || !cert->x509 || !(exp = X509_get0_notAfter(cert->x509))) {
 		ctx_log(ctx, level, "none");
+		return;
 	}
 
 	if ((bio = BIO_new(BIO_s_mem())) == NULL) {
@@ -498,14 +499,8 @@ static void *ctx_try_load_object(ENGINE_CTX *ctx,
 
 	if (matched_count == 0) {
 		if (match_tok) {
-			if (found_slot) {
-				ctx_log(ctx, 0, "The %s was not found on token %s\n",
-					object_typestr, found_slot->token->label[0] ?
-					found_slot->token->label : "no label");
-			} else {
-				ctx_log(ctx, 0, "No matching initialized token was found for %s\n",
-					object_typestr);
-			}
+			ctx_log(ctx, 0, "No matching initialized token was found for %s\n",
+				object_typestr);
 			goto error;
 		}
 
@@ -542,7 +537,7 @@ static void *ctx_try_load_object(ENGINE_CTX *ctx,
 		/* In several tokens certificates are marked as private */
 		if (login) {
 			/* Only try to login if login is required */
-			if (tok->loginRequired) {
+			if (tok->loginRequired || ctx->force_login) {
 				/* Only try to login if a single slot matched to avoiding trying
 				 * the PIN against all matching slots */
 				if (matched_count == 1) {
