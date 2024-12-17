@@ -41,16 +41,13 @@
 #if OPENSSL_VERSION_NUMBER >= 0x10100002L
 #ifndef OPENSSL_NO_EC
 static EC_KEY_METHOD *pkcs11_ec_key_method = NULL;
-void pkcs11_ec_key_method_free(void);
 #endif /* OPENSSL_NO_EC */
 #else /* OPENSSL_VERSION_NUMBER */
 #ifndef OPENSSL_NO_ECDSA
 static ECDSA_METHOD *pkcs11_ecdsa_method = NULL;
-void pkcs11_ecdsa_method_free(void);
 #endif /* OPENSSL_NO_ECDSA */
 #ifndef OPENSSL_NO_ECDH
 static ECDH_METHOD *pkcs11_ecdh_method = NULL;
-void pkcs11_ecdh_method_free(void);
 #endif /* OPENSSL_NO_ECDH */
 #endif /* OPENSSL_VERSION_NUMBER */
 
@@ -76,6 +73,8 @@ typedef ECDSA_SIG *(*sign_sig_fn)(const unsigned char *, int,
 	const BIGNUM *, const BIGNUM *, EC_KEY *);
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
+
+#define EC_KEY_METHOD_DYNAMIC   1
 
 /* ecdsa_method maintains unchanged layout between 0.9.8 and 1.0.2 */
 
@@ -352,7 +351,7 @@ PKCS11_OBJECT_private *pkcs11_get_ex_data_ec(const EC_KEY *ec)
 #endif
 }
 
-static void pkcs11_set_ex_data_ec(EC_KEY *ec, PKCS11_OBJECT_private *key)
+void pkcs11_set_ex_data_ec(EC_KEY *ec, PKCS11_OBJECT_private *key)
 {
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER)
 	EC_KEY_set_ex_data(ec, ec_ex_index, key);
@@ -593,7 +592,7 @@ static int pkcs11_ecdh_derive(unsigned char **out, size_t *outlen,
 	CK_BBOOL _true = TRUE;
 	CK_BBOOL _false = FALSE;
 	CK_OBJECT_HANDLE newkey = CK_INVALID_HANDLE;
-	CK_OBJECT_CLASS newkey_class= CKO_SECRET_KEY;
+	CK_OBJECT_CLASS newkey_class = CKO_SECRET_KEY;
 	CK_KEY_TYPE newkey_type = CKK_GENERIC_SECRET;
 	CK_ULONG newkey_len = key_len;
 	CK_OBJECT_HANDLE *tmpnewkey = (CK_OBJECT_HANDLE *)outnewkey;
@@ -609,17 +608,17 @@ static int pkcs11_ecdh_derive(unsigned char **out, size_t *outlen,
 	};
 
 	memset(&mechanism, 0, sizeof(mechanism));
-	mechanism.mechanism  = ecdh_mechanism;
-	mechanism.pParameter =  (void*)ec_params;
+	mechanism.mechanism = ecdh_mechanism;
+	mechanism.pParameter = (void *)ec_params;
 	switch (ecdh_mechanism) {
 		case CKM_ECDH1_DERIVE:
 		case CKM_ECDH1_COFACTOR_DERIVE:
-			mechanism.ulParameterLen  = sizeof(CK_ECDH1_DERIVE_PARAMS);
+			mechanism.ulParameterLen = sizeof(CK_ECDH1_DERIVE_PARAMS);
 			break;
 #if 0
 		/* TODO */
 		case CK_ECMQV_DERIVE_PARAMS:
-			mechanism.ulParameterLen  = sizeof(CK_ECMQV_DERIVE_PARAMS);
+			mechanism.ulParameterLen = sizeof(CK_ECMQV_DERIVE_PARAMS);
 			break;
 #endif
 		default:
@@ -805,8 +804,13 @@ void pkcs11_ec_key_method_free(void)
 {
 	if (pkcs11_ec_key_method) {
 		free_ec_ex_index();
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
+		if (meth->pkcs11_ecdh_method & EC_KEY_METHOD_DYNAMIC)
+			OPENSSL_free(pkcs11_ec_key_method);
+#else
 		EC_KEY_METHOD_free(pkcs11_ec_key_method);
-	    pkcs11_ec_key_method = NULL;
+#endif
+		pkcs11_ec_key_method = NULL;
 	}
 }
 
@@ -843,8 +847,13 @@ void pkcs11_ecdsa_method_free(void)
 {
 	if (pkcs11_ecdsa_method) {
 		free_ec_ex_index();
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
+		if (pkcs11_ecdsa_method->flags & EC_KEY_METHOD_DYNAMIC)
+			OPENSSL_free(pkcs11_ecdsa_method);
+#else
 		EC_KEY_METHOD_free(pkcs11_ecdsa_method);
-	    pkcs11_ecdsa_method = NULL;
+#endif
+		pkcs11_ecdsa_method = NULL;
 	}
 }
 
@@ -863,8 +872,13 @@ void pkcs11_ecdh_method_free(void)
 {
 	if (pkcs11_ecdh_method) {
 		free_ec_ex_index();
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
+		if (pkcs11_ecdh_method->flags & EC_KEY_METHOD_DYNAMIC)
+			OPENSSL_free(pkcs11_ecdh_method);
+#else
 		EC_KEY_METHOD_free(pkcs11_ecdh_method);
-	    pkcs11_ecdh_method = NULL;
+#endif
+		pkcs11_ecdh_method = NULL;
 	}
 }
 

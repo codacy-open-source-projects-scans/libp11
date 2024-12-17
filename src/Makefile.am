@@ -6,7 +6,7 @@ EXTRA_DIST = Makefile.mak libp11.rc.in pkcs11.rc.in
 
 noinst_HEADERS= libp11-int.h pkcs11.h p11_pthread.h
 include_HEADERS= libp11.h p11_err.h
-lib_LTLIBRARIES = libp11.la
+lib_LTLIBRARIES = libp11.la libpkcs11.la
 enginesexec_LTLIBRARIES = pkcs11.la
 pkgconfig_DATA = libp11.pc
 
@@ -15,13 +15,13 @@ SHARED_EXT=@SHARED_EXT@
 libp11_la_SOURCES = libpkcs11.c p11_attr.c p11_cert.c p11_err.c p11_ckr.c \
 	p11_key.c p11_load.c p11_misc.c p11_rsa.c p11_ec.c p11_pkey.c \
 	p11_slot.c p11_front.c p11_atfork.c libp11.exports
+libp11_la_CFLAGS = $(AM_CFLAGS) $(OPENSSL_CFLAGS)
+libp11_la_LIBADD = $(OPENSSL_LIBS)
 if WIN32
-libp11_la_SOURCES += libp11.rc
+libp11_la_LIBADD += libp11.lo
 else
 dist_noinst_DATA = libp11.rc
 endif
-libp11_la_CFLAGS = $(AM_CFLAGS) $(OPENSSL_CFLAGS)
-libp11_la_LIBADD = $(OPENSSL_LIBS)
 libp11_la_LDFLAGS = $(AM_LDFLAGS) \
 	-version-info @LIBP11_LT_CURRENT@:@LIBP11_LT_REVISION@:@LIBP11_LT_AGE@
 
@@ -48,6 +48,13 @@ pkcs11_la_LIBADD = $(libp11_la_OBJECTS) $(OPENSSL_LIBS)
 # application links with it. It is dynamically opened.
 pkcs11_la_LDFLAGS = $(AM_LDFLAGS) -module -shared -shrext $(SHARED_EXT) \
 	-avoid-version -export-symbols "$(srcdir)/pkcs11.exports"
+
+# Create a static version of the engine as well to allow applications
+# to statically link into it.
+
+libpkcs11_la_SOURCES = $(pkcs11_la_SOURCES)
+libpkcs11_la_CFLAGS = $(pkcs11_la_CFLAGS)
+libpkcs11_la_LIBADD = $(pkcs11_la_LIBADD)
 
 # OpenSSL older than 1.1.0 expected libpkcs11.so instead of pkcs11.so
 check-local: $(LTLIBRARIES)

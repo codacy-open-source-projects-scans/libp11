@@ -36,7 +36,7 @@
 #endif
 
 /* The maximum length of an internally-allocated PIN */
-#define MAX_PIN_LENGTH   32
+#define MAX_PIN_LENGTH   256
 
 struct st_engine_ctx {
 	/* Engine configuration */
@@ -142,10 +142,10 @@ static void ctx_destroy_pin(ENGINE_CTX *ctx)
  * passed to the user interface implemented by an application. Only the
  * application knows how to interpret the call-back data.
  * A (strdup'ed) copy of the PIN code will be stored in the pin variable. */
-static int ctx_get_pin(ENGINE_CTX *ctx, const char* token_label, UI_METHOD *ui_method, void *callback_data)
+static int ctx_get_pin(ENGINE_CTX *ctx, const char *token_label, UI_METHOD *ui_method, void *callback_data)
 {
 	UI *ui;
-	char* prompt;
+	char *prompt;
 
 	/* call ui to ask for a pin */
 	ui = UI_new_method(ui_method);
@@ -284,26 +284,16 @@ int ctx_destroy(ENGINE_CTX *ctx)
 	return 1;
 }
 
-static int ctx_enumerate_slots_unlocked(ENGINE_CTX *ctx, PKCS11_CTX *pkcs11_ctx)
+static int ctx_enumerate_slots_unlocked(ENGINE_CTX *ctx)
 {
 	/* PKCS11_update_slots() uses C_GetSlotList() via libp11 */
-	if (PKCS11_update_slots(pkcs11_ctx, &ctx->slot_list, &ctx->slot_count) < 0) {
+	if (PKCS11_update_slots(ctx->pkcs11_ctx, &ctx->slot_list, &ctx->slot_count) < 0) {
 		ctx_log(ctx, 0, "Failed to enumerate slots\n");
 		return 0;
 	}
 	ctx_log(ctx, 1, "Found %u slot%s\n", ctx->slot_count,
 		ctx->slot_count <= 1 ? "" : "s");
 	return 1;
-}
-
-static int ctx_enumerate_slots(ENGINE_CTX *ctx, PKCS11_CTX *pkcs11_ctx)
-{
-	int rv;
-
-	pthread_mutex_lock(&ctx->lock);
-	rv = ctx_enumerate_slots_unlocked(ctx, pkcs11_ctx);
-	pthread_mutex_unlock(&ctx->lock);
-	return rv;
 }
 
 /* Initialize libp11 data: ctx->pkcs11_ctx and ctx->slot_list */
@@ -326,10 +316,35 @@ static int ctx_init_libp11_unlocked(ENGINE_CTX *ctx)
 	}
 	ctx->pkcs11_ctx = pkcs11_ctx;
 
-	if (ctx_enumerate_slots_unlocked(ctx, pkcs11_ctx) != 1)
+	if (ctx_enumerate_slots_unlocked(ctx) != 1)
 		return -1;
 
 	return ctx->pkcs11_ctx && ctx->slot_list ? 0 : -1;
+}
+
+static int ctx_init_libp11(ENGINE_CTX *ctx)
+{
+	int rv;
+	
+	pthread_mutex_lock(&ctx->lock);
+	rv = ctx_init_libp11_unlocked(ctx);
+	pthread_mutex_unlock(&ctx->lock);
+	return rv;
+}
+
+static int ctx_enumerate_slots(ENGINE_CTX *ctx)
+{
+	int rv;
+	
+	if (!ctx->pkcs11_ctx)
+		ctx_init_libp11(ctx);
+	if (!ctx->pkcs11_ctx)
+		return -1;
+
+	pthread_mutex_lock(&ctx->lock);
+	rv = ctx_enumerate_slots_unlocked(ctx);
+	pthread_mutex_unlock(&ctx->lock);
+	return rv;
 }
 
 /* Function called from ENGINE_init() */
@@ -376,7 +391,7 @@ static void *ctx_try_load_object(ENGINE_CTX *ctx,
 {
 	PKCS11_SLOT *slot;
 	PKCS11_SLOT *found_slot = NULL, **matched_slots = NULL;
-	PKCS11_TOKEN *tok, *match_tok = NULL;
+	PKCS11_TOKEN *match_tok = NULL;
 	unsigned int n, m;
 	char *obj_id = NULL;
 	size_t obj_id_len = 0;
@@ -391,6 +406,10 @@ static void *ctx_try_load_object(ENGINE_CTX *ctx,
 	if (object_uri && *object_uri) {
 		obj_id_len = strlen(object_uri) + 1;
 		obj_id = OPENSSL_malloc(obj_id_len);
+		if (!obj_id) {
+			ctx_log(ctx, 0, "Could not allocate memory for ID\n");
+			goto cleanup;
+		}
 		if (!strncasecmp(object_uri, "pkcs11:", 7)) {
 			n = parse_pkcs11_uri(ctx, object_uri, &match_tok,
 				obj_id, &obj_id_len, tmp_pin, &tmp_pin_len, &obj_label);
@@ -400,12 +419,12 @@ static void *ctx_try_load_object(ENGINE_CTX *ctx,
 					"The PKCS#11 URI format is defined by RFC7512\n",
 					object_typestr);
 				ENGerr(ENG_F_CTX_LOAD_OBJECT, ENG_R_INVALID_ID);
-				goto error;
+				goto cleanup;
 			}
 			if (tmp_pin_len > 0 && tmp_pin[0] != 0) {
 				tmp_pin[tmp_pin_len] = 0;
 				if (!ctx_ctrl_set_pin(ctx, tmp_pin)) {
-					goto error;
+					goto cleanup;
 				}
 			}
 			ctx_log(ctx, 1, "Looking in slots for %s %s login: ",
@@ -421,7 +440,7 @@ static void *ctx_try_load_object(ENGINE_CTX *ctx,
 					"still accepted for now\n",
 					object_typestr);
 				ENGerr(ENG_F_CTX_LOAD_OBJECT, ENG_R_INVALID_ID);
-				goto error;
+				goto cleanup;
 			}
 			ctx_log(ctx, 1, "Looking in slot %d for %s %s login: ",
 				slot_nr, object_typestr, login ? "with" : "without");
@@ -440,8 +459,8 @@ static void *ctx_try_load_object(ENGINE_CTX *ctx,
 	matched_slots = (PKCS11_SLOT **)calloc(ctx->slot_count,
 		sizeof(PKCS11_SLOT *));
 	if (!matched_slots) {
-		ctx_log(ctx, 0, "Could not allocate memory for matched slots\n");
-		goto error;
+		ctx_log(ctx, 0, "Could not allocate memory for slots\n");
+		goto cleanup;
 	}
 
 	for (n = 0; n < ctx->slot_count; n++) {
@@ -457,7 +476,7 @@ static void *ctx_try_load_object(ENGINE_CTX *ctx,
 			if (slot->token->readOnly)
 				strcat(flags, "ro, ");
 		} else {
-			strcpy(flags, "no token");
+			strcpy(flags, "no token, ");
 		}
 		if ((m = strlen(flags)) != 0) {
 			flags[m - 2] = '\0';
@@ -489,8 +508,9 @@ static void *ctx_try_load_object(ENGINE_CTX *ctx,
 		}
 		ctx_log(ctx, 1, "\n");
 
-		/* Ignore slots without tokens or with uninitialized token */
-		if (found_slot && found_slot->token && found_slot->token->initialized) {
+		/* Ignore slots without tokens. Thales HSM (and potentially
+		 * other modules) allow objects on uninitialized tokens. */
+		if (found_slot && found_slot->token) {
 			matched_slots[matched_count] = found_slot;
 			matched_count++;
 		}
@@ -501,73 +521,151 @@ static void *ctx_try_load_object(ENGINE_CTX *ctx,
 		if (match_tok) {
 			ctx_log(ctx, 0, "No matching initialized token was found for %s\n",
 				object_typestr);
-			goto error;
+			goto cleanup;
 		}
 
 		/* If the legacy slot ID format was used */
 		if (slot_nr != -1) {
 			ctx_log(ctx, 0, "The %s was not found on slot %d\n", object_typestr, slot_nr);
-			goto error;
+			goto cleanup;
 		} else {
 			found_slot = PKCS11_find_token(ctx->pkcs11_ctx,
 								ctx->slot_list, ctx->slot_count);
-			/* Ignore if the the token is not initialized */
-			if (found_slot && found_slot->token &&
-					found_slot->token->initialized) {
+			/* Ignore slots without tokens. Thales HSM (and potentially
+			 * other modules) allow objects on uninitialized tokens. */
+			if (found_slot && found_slot->token) {
 				matched_slots[matched_count] = found_slot;
 				matched_count++;
 			} else {
 				ctx_log(ctx, 0, "No tokens found\n");
-				goto error;
+				goto cleanup;
 			}
 		}
 	}
 
-	for (n = 0; n < matched_count; n++) {
-		slot = matched_slots[n];
-		tok = slot->token;
-		if (!tok) {
-			ctx_log(ctx, 0, "Empty slot found\n");
-			break;
-		}
+	/* In several tokens certificates are marked as private */
+	if (login) {
+		/* Only try to login if a single slot matched to avoiding trying
+		 * the PIN against all matching slots */
 
-		ctx_log(ctx, 1, "Found slot:  %s\n", slot->description);
-		ctx_log(ctx, 1, "Found token: %s\n", slot->token->label);
+		if (matched_count == 1) {
+			slot = matched_slots[0];
+			if (!slot->token) {
+				ctx_log(ctx, 0, "Empty slot found:  %s\n", slot->description);
+				goto cleanup; /* failed */
+			}
+			ctx_log(ctx, 1, "Found slot:  %s\n", slot->description);
+			ctx_log(ctx, 1, "Found token: %s\n", slot->token->label[0]?
+				slot->token->label : "no label");
 
-		/* In several tokens certificates are marked as private */
-		if (login) {
 			/* Only try to login if login is required */
-			if (tok->loginRequired || ctx->force_login) {
-				/* Only try to login if a single slot matched to avoiding trying
-				 * the PIN against all matching slots */
-				if (matched_count == 1) {
-					if (!ctx_login(ctx, slot, tok,
-							ui_method, callback_data)) {
-						ctx_log(ctx, 0, "Login to token failed, returning NULL...\n");
-						goto error;
-					}
-				} else {
-					ctx_log(ctx, 0, "Multiple matching slots (%zu); will not try to"
-						" login\n", matched_count);
-					for (m = 0; m < matched_count; m++){
-						slot = matched_slots[m];
-						ctx_log(ctx, 0, "- [%u] %s: %s\n", m + 1,
-								slot->description? slot->description:
-								"(no description)",
-								(slot->token && slot->token->label)?
-								slot->token->label: "no label");
-					}
-					goto error;
+			if (slot->token->loginRequired || ctx->force_login) {
+				if (!ctx_login(ctx, slot, slot->token, ui_method, callback_data)) {
+					ctx_log(ctx, 0, "Login to token failed, returning NULL...\n");
+					goto cleanup; /* failed */
 				}
 			}
-		}
+		} else {
+			/* Multiple matching slots */
+			size_t init_count = 0;
+			size_t uninit_count = 0;
+			PKCS11_SLOT **init_slots = NULL, **uninit_slots = NULL;
 
-		object = match_func(ctx, tok, obj_id, obj_id_len, obj_label);
-		if (object)
-			break;
+			init_slots = (PKCS11_SLOT **)calloc(ctx->slot_count, sizeof(PKCS11_SLOT *));
+			if (!init_slots) {
+				ctx_log(ctx, 0, "Could not allocate memory for slots\n");
+				goto cleanup; /* failed */
+			}
+			uninit_slots = (PKCS11_SLOT **)calloc(ctx->slot_count, sizeof(PKCS11_SLOT *));
+			if (!uninit_slots) {
+				ctx_log(ctx, 0, "Could not allocate memory for slots\n");
+				free(init_slots);
+				goto cleanup; /* failed */
+			}
+
+			for (m = 0; m < matched_count; m++) {
+				slot = matched_slots[m];
+				if (!slot->token) {
+					ctx_log(ctx, 0, "Empty slot found:  %s\n", slot->description);
+					continue; /* skipped */
+				}
+				if (slot->token->initialized) {
+					init_slots[init_count] = slot;
+					init_count++;
+				} else {
+					uninit_slots[uninit_count] = slot;
+					uninit_count++;
+				}
+			}
+
+			/* Initialized tokens */
+			if (init_count == 1) {
+				slot = init_slots[0];
+				ctx_log(ctx, 1, "Found slot:  %s\n", slot->description);
+				ctx_log(ctx, 1, "Found token: %s\n", slot->token->label[0]?
+					slot->token->label : "no label");
+
+				/* Only try to login if login is required */
+				if (slot->token->loginRequired || ctx->force_login) {
+					if (!ctx_login(ctx, slot, slot->token, ui_method, callback_data)) {
+						ctx_log(ctx, 0, "Login to token failed, returning NULL...\n");
+						free(init_slots);
+						free(uninit_slots);
+						goto cleanup; /* failed */
+					}
+				}
+			} else {
+				/* Multiple slots with initialized token */
+				if (init_count > 1) {
+					ctx_log(ctx, 0, "Multiple matching slots (%zu);"
+						" will not try to login\n", init_count);
+				}
+				for (m = 0; m < init_count; m++) {
+					slot = init_slots[m];
+					ctx_log(ctx, 0, "- [%u] %s: %s\n", m + 1,
+						slot->description? slot->description:
+						"(no description)",
+						(slot->token && slot->token->label)?
+						slot->token->label: "no label");
+				}
+				free(init_slots);
+
+				/* Uninitialized tokens, user PIN is unset */
+				for (m = 0; m < uninit_count; m++) {
+					slot = uninit_slots[m];
+					ctx_log(ctx, 1, "Found slot:  %s\n", slot->description);
+					ctx_log(ctx, 1, "Found token: %s\n", slot->token->label[0]?
+						slot->token->label : "no label");
+					object = match_func(ctx, slot->token, obj_id, obj_id_len, obj_label);
+					if (object) {
+						free(uninit_slots);
+						goto cleanup; /* success */
+					}
+				}
+				free(uninit_slots);
+				goto cleanup; /* failed */
+			}
+		}
+		object = match_func(ctx, slot->token, obj_id, obj_id_len, obj_label);
+
+	} else {
+		/* Find public object */
+		for (n = 0; n < matched_count; n++) {
+			slot = matched_slots[n];
+			if (!slot->token) {
+				ctx_log(ctx, 0, "Empty slot found:  %s\n", slot->description);
+				break;
+			}
+			ctx_log(ctx, 1, "Found slot:  %s\n", slot->description);
+			ctx_log(ctx, 1, "Found token: %s\n", slot->token->label[0]?
+				slot->token->label : "no label");
+			object = match_func(ctx, slot->token, obj_id, obj_id_len, obj_label);
+			if (object)
+				break; /* success */
+		}
 	}
 
-error:
+cleanup:
 	/* Free the searched token data */
 	if (match_tok) {
 		OPENSSL_free(match_tok->model);
@@ -1050,7 +1148,7 @@ int ctx_engine_ctrl(ENGINE_CTX *ctx, int cmd, long i, void *p, void (*f)())
 	case CMD_FORCE_LOGIN:
 		return ctx_ctrl_force_login(ctx);
 	case CMD_RE_ENUMERATE:
-		return ctx_enumerate_slots(ctx, ctx->pkcs11_ctx);
+		return ctx_enumerate_slots(ctx);
 	default:
 		ENGerr(ENG_F_CTX_ENGINE_CTRL, ENG_R_UNKNOWN_COMMAND);
 		break;
