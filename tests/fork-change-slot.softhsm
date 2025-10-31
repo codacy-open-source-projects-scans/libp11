@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# Copyright © 2024 Mobi - Com Polska Sp. z o.o.
+# Author: Małgorzata Olszówka <Malgorzata.Olszowka@stunnel.org>
+# Copyright (C) 2013 Nikos Mavrogiannopoulos
+# Copyright (C) 2015 Red Hat, Inc.
+#
+# This is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 3 of the License, or (at
+# your option) any later version.
+#
+# GnuTLS is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with GnuTLS; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+
+outdir="output.$$"
+
+# Load common test functions
+. ${srcdir}/common.sh
+
+# Initialize SoftHSM DB
+init_db
+
+# Create 2 different tokens
+init_card "token1"
+init_card "token2"
+
+# Generate an RSA key pair on the second token
+generate_rsa_key_pair "pkey" "token2"
+
+# Load openssl settings
+TEMP_LD_LIBRARY_PATH=${LD_LIBRARY_PATH}
+. ${srcdir}/openssl-settings.sh
+
+# Run the test program which will stop and wait for a signal (SIGUSR1)
+# Valgrind cannot be used because the test program waits indefinitely at the sigwait call
+./fork-change-slot "pkcs11:token=token2;object=pkey;type=private;pin-value=$PIN" \
+	"${outdir}/engines.cnf" ${MODULE} &
+pid=$!
+
+# Restore settings
+export LD_LIBRARY_PATH=${TEMP_LD_LIBRARY_PATH}
+
+# Wait the test program to reach the sigwait
+sleep 3
+
+# Remove the first token to change the slotID associated with token2
+remove_card "token1"
+
+# Send the signal to the waiting process
+kill -USR1 `pgrep -P $pid`
+
+# Test the result
+wait $pid
+if [[ $? -ne 0 ]]; then
+	exit 1
+fi
+
+# Cleanup
+rm -rf "$outdir"
+
+exit 0
+

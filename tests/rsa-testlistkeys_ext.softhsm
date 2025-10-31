@@ -1,0 +1,83 @@
+#!/bin/bash
+
+# Copyright © 2024 Mobi - Com Polska Sp. z o.o.
+# Author: Małgorzata Olszówka <Malgorzata.Olszowka@stunnel.org>
+# Copyright (C) 2023 Koninklijke Philips N.V.
+#
+# This is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 3 of the License, or (at
+# your option) any later version.
+#
+# GnuTLS is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with GnuTLS; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+
+outdir="output.$$"
+
+# Load common test functions
+. ${srcdir}/common.sh
+
+# Do the token initialization
+init_token "rsa" "1" "libp11" ${ID} "server-key" "privkey" "pubkey" "cert"
+
+# Write more objects with different labels to the token
+import_objects "rsa" "libp11-0" "01020314" "server-key-1" "privkey" "pubkey" "cert"
+import_objects "rsa" "libp11-0" "01020324" "server-key-2" "privkey" "pubkey" "cert"
+import_objects "rsa" "libp11-0" "01020334" "server-key-3" "privkey" "pubkey" "cert"
+import_objects "rsa" "libp11-0" "01020344" "server-key-4" "privkey" "pubkey" "cert"
+
+list_objects "libp11-0"
+
+# Load openssl settings
+TEMP_LD_LIBRARY_PATH=${LD_LIBRARY_PATH}
+. ${srcdir}/openssl-settings.sh
+
+# Run the test
+${WRAPPER} ../examples/listkeys_ext -m ${MODULE} -p ${PIN} | grep -q 'nkeys:5'
+if [[ $? -ne 0 ]]; then
+	echo "Failed when no search parameters were given. 5 Keys should have been found."
+	exit 1
+fi
+
+../examples/listkeys_ext -m ${MODULE} -p ${PIN} -i "01020314" | grep -q 'nkeys:1'
+if [[ $? -ne 0 ]]; then
+	echo "Failed when searching with id. Only 1 key should have been found."
+	exit 1
+fi
+
+../examples/listkeys_ext -m ${MODULE} -p ${PIN} -i "1020314" | grep -q 'nkeys:1'
+if [[ $? -ne 0 ]]; then
+	echo "Failed when searching with id. Only 1 key should have been found."
+	exit 1
+fi
+
+../examples/listkeys_ext -m ${MODULE} -p ${PIN} -l server-key-3 | grep -q 'nkeys:1'
+if [[ $? -ne 0 ]]; then
+	echo "Failed when searching with label. Only 1 key should have been found."
+	exit 1
+fi
+
+../examples/listkeys_ext -m ${MODULE} -p ${PIN} -i "01020334" -l server-key-3 | grep -q 'nkeys:1'
+if [[ $? -ne 0 ]]; then
+	echo "Failed when searching with id and label. Only 1 key should have been found."
+	exit 1
+fi
+
+../examples/listkeys_ext -m ${MODULE} -p ${PIN} -i "01020334" -l server-key-1
+if [[ $? -eq 0 ]]; then
+	echo "Did not fail when no keys should have been found."
+	exit 1
+fi
+
+# Restore settings
+export LD_LIBRARY_PATH=${TEMP_LD_LIBRARY_PATH}
+
+rm -rf "$outdir"
+
+exit 0
