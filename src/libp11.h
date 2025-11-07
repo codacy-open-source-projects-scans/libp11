@@ -1,5 +1,6 @@
-/* libp11, a simple layer on to of PKCS#11 API
+/* libp11, a simple layer on top of PKCS#11 API
  * Copyright (C) 2005 Olaf Kirch <okir@lst.de>
+ * Copyright © 2025 Mobi - Com Polska Sp. z o.o.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -105,6 +106,43 @@ typedef struct PKCS11_ctx_st {
 	char *description;
 	void *_private;
 } PKCS11_CTX;
+
+typedef struct PKCS11_ec_kgen_st {
+	const char *curve;
+} PKCS11_EC_KGEN;
+
+typedef struct PKCS11_eddsa_kgen_st {
+	int nid;                 /* NID_ED25519 or NID_ED448 */
+} PKCS11_EDDSA_KGEN;
+
+typedef struct PKCS11_rsa_kgen_st {
+	unsigned int bits;
+} PKCS11_RSA_KGEN;
+
+typedef struct PKCS11_params {
+	unsigned char extractable;
+	unsigned char sensitive;
+} PKCS11_params;
+
+typedef struct PKCS11_kgen_attrs_st {
+	/* Key generation type from OpenSSL. Given the union below this should
+	 * be either EVP_PKEY_EC or EVP_PKEY_RSA or EVP_PKEY_ED25519 or EVP_PKEY_ED448
+	 */
+	int type;
+	union {
+		PKCS11_EC_KGEN *ec;
+		PKCS11_EDDSA_KGEN *eddsa;
+		PKCS11_RSA_KGEN *rsa;
+	} kgen;
+	const char *token_label;
+	const char *key_label;
+	const unsigned char *key_id;
+	size_t id_len;
+	const PKCS11_params *key_params;
+} PKCS11_KGEN_ATTRS;
+
+/** PKCS11 ASCII logging callback */
+typedef void (*PKCS11_VLOG_A_CB)(int, const char *, va_list);
 
 /**
  * Create a new libp11 context
@@ -225,7 +263,7 @@ PKCS11_SLOT *PKCS11_find_token(PKCS11_CTX *ctx,
  */
 PKCS11_SLOT *PKCS11_find_next_token(PKCS11_CTX *ctx,
 			PKCS11_SLOT *slots, unsigned int nslots,
-		   	PKCS11_SLOT *slot);
+			PKCS11_SLOT *slot);
 
 /**
  * Check if user is already authenticated to a card
@@ -429,11 +467,22 @@ extern void ERR_load_PKCS11_strings(void);
  */
 
 /**
+ * Generate key pair on the token
+ *
+ * @param token on which the key should be generated
+ * @param kgen_attrs struct describing key generation (selection of algorithm,
+ * algorithm parameters...)
+ * @retval 0 on success
+ * @retval -1 error
+ */
+extern int PKCS11_keygen(PKCS11_TOKEN *token, PKCS11_KGEN_ATTRS *kgen_attrs);
+
+/**
  * Generate a private key on the token
  *
  * @param token token returned by PKCS11_find_token()
- * @param algorithm IGNORED (still here for backward compatibility)
- * @param bits size of the modulus in bits
+ * @param algorithm EVP_PKEY_EC any other value select EVP_PKEY_RSA
+ * @param bits_or_nid size of the modulus in bits or the nid of the curve
  * @param label label for this key
  * @param id bytes to use as the id value
  * @param id_len length of the id value
@@ -441,7 +490,7 @@ extern void ERR_load_PKCS11_strings(void);
  * @retval -1 error
  */
 extern int PKCS11_generate_key(PKCS11_TOKEN *token,
-	int algorithm, unsigned int bits,
+	int algorithm, unsigned int bits_or_nid,
 	char *label, unsigned char *id, size_t id_len);
 
 /* Get the RSA key modulus size (in bytes) */
@@ -487,6 +536,9 @@ extern int PKCS11_private_decrypt(
 	int flen, const unsigned char *from,
 	unsigned char *to, PKCS11_KEY *key, int padding);
 
+/* Set the logging callback */
+extern void PKCS11_set_vlog_a_method(PKCS11_CTX *pctx, PKCS11_VLOG_A_CB cb);
+
 /* Function codes */
 # define CKR_F_PKCS11_CHANGE_PIN                          100
 # define CKR_F_PKCS11_CHECK_TOKEN                         101
@@ -520,6 +572,7 @@ extern int PKCS11_private_decrypt(
 # define CKR_F_PKCS11_GENERATE_KEY                        130
 # define CKR_F_PKCS11_RELOAD_CERTIFICATE                  131
 # define CKR_F_PKCS11_GET_SESSION                         132
+# define CKR_F_PKCS11_EDDSA_SIGN                          133
 
 /* Backward compatibility of error function codes */
 #define PKCS11_F_PKCS11_CHANGE_PIN CKR_F_PKCS11_CHANGE_PIN

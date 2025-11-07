@@ -1,5 +1,6 @@
-/* libp11, a simple layer on to of PKCS#11 API
+/* libp11, a simple layer on top of PKCS#11 API
  * Copyright (C) 2005 Olaf Kirch <okir@lst.de>
+ * Copyright © 2025 Mobi - Com Polska Sp. z o.o.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -20,9 +21,7 @@
 #include <string.h>
 
 /* Global number of active PKCS11_CTX objects */
-static int pkcs11_global_data_refs = 0;
-
-static void pkcs11_global_data_free(void);
+int pkcs11_global_data_refs = 0;
 
 /*
  * Create a new context
@@ -83,9 +82,11 @@ static int pkcs11_initialize(PKCS11_CTX_private *cpriv)
 	args.pReserved = cpriv->init_args;
 	rv = cpriv->method->C_Initialize(&args);
 	if (rv && rv != CKR_CRYPTOKI_ALREADY_INITIALIZED) {
+		cpriv->initialized = 0;
 		CKRerr(P11_F_PKCS11_CTX_LOAD, rv);
 		return -1;
 	}
+	cpriv->initialized = 1;
 	return 0;
 }
 
@@ -105,8 +106,7 @@ int pkcs11_CTX_load(PKCS11_CTX *ctx, const char *name)
 	}
 
 	if (pkcs11_initialize(cpriv)) {
-		C_UnloadModule(cpriv->handle);
-		cpriv->handle = NULL;
+		pkcs11_CTX_unload(ctx);
 		return -1;
 	}
 
@@ -114,9 +114,7 @@ int pkcs11_CTX_load(PKCS11_CTX *ctx, const char *name)
 	memset(&ck_info, 0, sizeof(ck_info));
 	rv = cpriv->method->C_GetInfo(&ck_info);
 	if (rv) {
-		cpriv->method->C_Finalize(NULL);
-		C_UnloadModule(cpriv->handle);
-		cpriv->handle = NULL;
+		pkcs11_CTX_unload(ctx);
 		CKRerr(P11_F_PKCS11_CTX_LOAD, rv);
 		return -1;
 	}
@@ -146,16 +144,18 @@ void pkcs11_CTX_unload(PKCS11_CTX *ctx)
 {
 	PKCS11_CTX_private *cpriv = PRIVCTX(ctx);
 
-	if (!cpriv->method) /* Module not loaded */
-		return;
-
 	/* Tell the PKCS11 library to shut down */
-	if (cpriv->forkid == get_forkid())
-		cpriv->method->C_Finalize(NULL);
+	if (cpriv->method) {
+		if (cpriv->initialized && cpriv->forkid == get_forkid())
+			cpriv->method->C_Finalize(NULL);
+		cpriv->method = NULL;
+	}
 
 	/* Unload the module */
-	C_UnloadModule(cpriv->handle);
-	cpriv->handle = NULL;
+	if (cpriv->handle) {
+		C_UnloadModule(cpriv->handle);
+		cpriv->handle = NULL;
+	}
 }
 
 /*
@@ -177,18 +177,16 @@ void pkcs11_CTX_free(PKCS11_CTX *ctx)
 	OPENSSL_free(ctx->_private);
 	OPENSSL_free(ctx);
 
-	if (--pkcs11_global_data_refs == 0)
-		pkcs11_global_data_free();
-}
-
-static void pkcs11_global_data_free(void)
-{
+	pkcs11_global_data_refs--;
 #ifndef OPENSSL_NO_RSA
 	pkcs11_rsa_method_free();
 #endif
 #if OPENSSL_VERSION_NUMBER >= 0x10100002L
 #ifndef OPENSSL_NO_EC
 	pkcs11_ec_key_method_free();
+# if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	pkcs11_ed_key_method_free();
+# endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
 #endif /* OPENSSL_NO_EC */
 #else /* OPENSSL_VERSION_NUMBER */
 #ifndef OPENSSL_NO_ECDSA

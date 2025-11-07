@@ -1,0 +1,55 @@
+#!/bin/bash
+
+# Copyright © 2025 Mobi - Com Polska Sp. z o.o.
+# Author: Małgorzata Olszówka <Malgorzata.Olszowka@stunnel.org>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>
+
+outdir="output.$$"
+
+# Load common test functions
+. ${srcdir}/common.sh
+
+# Do the token initialization
+init_token "rsa" "1" "libp11" ${ID} "server-key" "privkey" "" "cert"
+
+# Load openssl settings
+TEMP_LD_LIBRARY_PATH=${LD_LIBRARY_PATH}
+. ${srcdir}/openssl-settings.sh
+
+# RSA certificate to store
+${OPENSSL} x509 -in ${srcdir}/rsa-cert.der -inform DER -outform PEM \
+	-out ${outdir}/rsa-cert.pem
+CERTIFICATE="${outdir}/rsa-cert.pem"
+CERTIFICATE_URL="pkcs11:token=libp11-0;id=04030201;object=stored-cert;pin-value=1234"
+
+# Run the test
+${WRAPPER} ../examples/storecert ${CERTIFICATE} ${CERTIFICATE_URL} ${MODULE}
+if [[ $? -ne 0 ]]; then
+	echo "RSA certificate storing couldn't be performed"
+	exit 1
+fi
+
+# Restore settings
+export LD_LIBRARY_PATH=${TEMP_LD_LIBRARY_PATH}
+
+list_objects && list_objects | grep -q stored-cert
+if [[ $? -ne 0 ]]; then
+	echo "The RSA certificate was not properly stored"
+	exit 1
+fi
+
+rm -rf "$outdir"
+
+exit 0

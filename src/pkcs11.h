@@ -96,8 +96,8 @@ extern "C" {
 #endif
 
 #ifdef CRYPTOKI_COMPAT
-  /* If we are in compatibility mode, switch all exposed names to the
-     PKCS #11 variant.  There are corresponding #undefs below.  */
+/* If we are in compatibility mode, switch all exposed names to the
+ * PKCS #11 variant.  There are corresponding #undefs below. */
 
 #define ck_flags_t CK_FLAGS
 #define ck_version _CK_VERSION
@@ -359,10 +359,13 @@ typedef unsigned long ck_key_type_t;
 #define CKK_GOSTR3410		(0x30UL)
 #define CKK_GOSTR3411		(0x31UL)
 #define CKK_GOST28147		(0x32UL)
+#define CKK_EC_EDWARDS		(0x40UL)
 #define CKK_VENDOR_DEFINED	(1UL << 31)
 
-// A mask for new GOST algorithms.
-// For details visit https://tc26.ru/standarts/perevody/guidelines-the-pkcs-11-extensions-for-implementing-the-gost-r-34-10-2012-and-gost-r-34-11-2012-russian-standards-.html
+/*
+ * A mask for new GOST algorithms.  For details visit:
+ * https://tc26.ru/standarts/perevody/guidelines-the-pkcs-11-extensions-for-implementing-the-gost-r-34-10-2012-and-gost-r-34-11-2012-russian-standards-.html
+ */
 #define NSSCK_VENDOR_PKCS11_RU_TEAM     (CKK_VENDOR_DEFINED | 0x54321000)
 #define CK_VENDOR_PKCS11_RU_TEAM_TK26   NSSCK_VENDOR_PKCS11_RU_TEAM
 
@@ -713,6 +716,8 @@ typedef unsigned long ck_mechanism_type_t;
 #define CKM_ECDH1_DERIVE		(0x1050UL)
 #define CKM_ECDH1_COFACTOR_DERIVE	(0x1051UL)
 #define CKM_ECMQV_DERIVE		(0x1052UL)
+#define CKM_EC_EDWARDS_KEY_PAIR_GEN	(0x1055UL)
+#define CKM_EDDSA			(0x1057UL)
 #define CKM_JUNIPER_KEY_GEN		(0x1060UL)
 #define CKM_JUNIPER_ECB128		(0x1061UL)
 #define CKM_JUNIPER_CBC128		(0x1062UL)
@@ -855,6 +860,15 @@ typedef struct CK_RSA_PKCS_PSS_PARAMS {
 	CK_RSA_PKCS_MGF_TYPE mgf;
 	unsigned long sLen;
 } CK_RSA_PKCS_PSS_PARAMS;
+
+/* EDDSA */
+typedef struct CK_EDDSA_PARAMS {
+	unsigned char phFlag;
+	unsigned long ulContextDataLen;
+	unsigned char *pContextData;
+} CK_EDDSA_PARAMS;
+
+typedef CK_EDDSA_PARAMS *CK_EDDSA_PARAMS_PTR;
 
 #define CKG_MGF1_SHA1			(0x00000001UL)
 #define CKG_MGF1_SHA224		(0x00000005UL)

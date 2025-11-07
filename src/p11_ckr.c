@@ -1,4 +1,4 @@
-/* libp11, a simple layer on to of PKCS#11 API
+/* libp11, a simple layer on top of PKCS#11 API
  * Copyright (C) 2005 Olaf Kirch <okir@lst.de>
  *
  *  This library is free software; you can redistribute it and/or
@@ -57,6 +57,7 @@ static ERR_STRING_DATA CKR_str_functs[] = {
 	{ERR_FUNC(CKR_F_PKCS11_STORE_KEY), "pkcs11_store_key"},
 	{ERR_FUNC(CKR_F_PKCS11_RELOAD_CERTIFICATE), "pkcs11_reload_certificate"},
 	{ERR_FUNC(CKR_F_PKCS11_GET_SESSION), "pkcs11_get_session"},
+	{ERR_FUNC(CKR_F_PKCS11_EDDSA_SIGN), "pkcs11_eddsa_sign"},
 	{0, NULL}
 };
 

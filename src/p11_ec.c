@@ -1,8 +1,8 @@
-/* libp11, a simple layer on to of PKCS#11 API
+/* libp11, a simple layer on top of PKCS#11 API
  * Copyright (C) 2005 Olaf Kirch <okir@lst.de>
  * Copyright (C) 2011, 2013 Douglas E. Engert <deengert@anl.gov>
  * Copyright (C) 2014, 2016 Douglas E. Engert <deengert@gmail.com>
- * Copyright (C) 2016-2018 Michał Trojnara <Michal.Trojnara@stunnel.org>
+ * Copyright (C) 2016-2025 Michał Trojnara <Michal.Trojnara@stunnel.org>
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -62,8 +62,11 @@ typedef int (*compute_key_fn)(void *, size_t,
 	void *(*)(const void *, size_t, void *, size_t *));
 #endif
 static compute_key_fn ossl_ecdh_compute_key;
+
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER)
 static void (*ossl_ec_finish)(EC_KEY *);
 static int (*ossl_ec_copy)(EC_KEY *, const EC_KEY *);
+#endif /* OPENSSL_VERSION_NUMBER */
 
 static int ec_ex_index = 0;
 
@@ -98,6 +101,7 @@ struct ecdsa_method {
 ECDSA_METHOD *ECDSA_METHOD_new(const ECDSA_METHOD *m)
 {
 	ECDSA_METHOD *out;
+
 	out = OPENSSL_malloc(sizeof(ECDSA_METHOD));
 	if (!out)
 		return NULL;
@@ -140,6 +144,7 @@ struct ecdh_method {
 ECDH_METHOD *ECDH_METHOD_new(const ECDH_METHOD *m)
 {
 	ECDH_METHOD *out;
+
 	out = OPENSSL_malloc(sizeof(ECDH_METHOD));
 	if (!out)
 		return NULL;
@@ -170,7 +175,7 @@ void ECDH_METHOD_set_compute_key(ECDH_METHOD *m, compute_key_fn f)
 /********** Manage EC ex_data */
 
 /* NOTE: ECDH also uses ECDSA ex_data and *not* ECDH ex_data */
-static void alloc_ec_ex_index()
+static void alloc_ec_ex_index(void)
 {
 	if (ec_ex_index == 0) {
 		while (ec_ex_index == 0) /* Workaround for OpenSSL RT3710 */
@@ -186,7 +191,7 @@ static void alloc_ec_ex_index()
 	}
 }
 
-static void free_ec_ex_index()
+static void free_ec_ex_index(void)
 {
 	if (ec_ex_index > 0) {
 #if OPENSSL_VERSION_NUMBER >= 0x10100002L
@@ -443,6 +448,8 @@ static int pkcs11_ecdsa_sign(const unsigned char *msg, unsigned int msg_len,
 	return ck_sigsize;
 }
 
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER)
+
 static void pkcs11_ec_finish(EC_KEY *ec)
 {
 	PKCS11_OBJECT_private *key;
@@ -455,6 +462,8 @@ static void pkcs11_ec_finish(EC_KEY *ec)
 	if (ossl_ec_finish)
 		ossl_ec_finish(ec);
 }
+
+#endif /* OPENSSL_VERSION_NUMBER */
 
 /**
  * ECDSA signing method (replaces ossl_ecdsa_sign_sig)
@@ -558,7 +567,7 @@ static CK_ECDH1_DERIVE_PARAMS *pkcs11_ecdh_params_alloc(
 	parms->pSharedData = NULL;
 	parms->ulSharedDataLen = 0;
 	parms->pPublicData = buf;
-	parms->ulPublicDataLen = len;
+	parms->ulPublicDataLen = (CK_ULONG)len;
 	return parms;
 }
 
@@ -601,10 +610,9 @@ static int pkcs11_ecdh_derive(unsigned char **out, size_t *outlen,
 		{CKA_CLASS, &newkey_class, sizeof(newkey_class)},
 		{CKA_KEY_TYPE, &newkey_type, sizeof(newkey_type)},
 		{CKA_VALUE_LEN, &newkey_len, sizeof(newkey_len)},
-		{CKA_SENSITIVE, &_false, sizeof(_false) },
-		{CKA_EXTRACTABLE, &_true, sizeof(_true) },
-		{CKA_ENCRYPT, &_true, sizeof(_true)},
-		{CKA_DECRYPT, &_true, sizeof(_true)}
+		{CKA_SENSITIVE, &_false, sizeof(_false)},
+		{CKA_EXTRACTABLE, &_true, sizeof(_true)},
+		{CKA_DERIVE, &_true, sizeof(_true)},
 	};
 
 	memset(&mechanism, 0, sizeof(mechanism));
@@ -796,13 +804,14 @@ EC_KEY_METHOD *PKCS11_get_ec_key_method(void)
 		EC_KEY_METHOD_set_sign(pkcs11_ec_key_method, orig_sign, NULL, pkcs11_ecdsa_sign_sig);
 		EC_KEY_METHOD_get_compute_key(pkcs11_ec_key_method, &ossl_ecdh_compute_key);
 		EC_KEY_METHOD_set_compute_key(pkcs11_ec_key_method, pkcs11_ec_ckey);
+		atexit(pkcs11_ec_key_method_free);
 	}
 	return pkcs11_ec_key_method;
 }
 
 void pkcs11_ec_key_method_free(void)
 {
-	if (pkcs11_ec_key_method) {
+	if (pkcs11_global_data_refs == 0 && pkcs11_ec_key_method) {
 		free_ec_ex_index();
 #if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
 		if (meth->pkcs11_ecdh_method & EC_KEY_METHOD_DYNAMIC)
@@ -839,13 +848,14 @@ ECDSA_METHOD *PKCS11_get_ecdsa_method(void)
 		alloc_ec_ex_index();
 		pkcs11_ecdsa_method = ECDSA_METHOD_new((ECDSA_METHOD *)ECDSA_OpenSSL());
 		ECDSA_METHOD_set_sign(pkcs11_ecdsa_method, pkcs11_ecdsa_sign_sig);
+		atexit(pkcs11_ecdsa_method_free);
 	}
 	return pkcs11_ecdsa_method;
 }
 
 void pkcs11_ecdsa_method_free(void)
 {
-	if (pkcs11_ecdsa_method) {
+	if (pkcs11_global_data_refs == 0 && pkcs11_ecdsa_method) {
 		free_ec_ex_index();
 #if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
 		if (pkcs11_ecdsa_method->flags & EC_KEY_METHOD_DYNAMIC)
@@ -864,13 +874,14 @@ ECDH_METHOD *PKCS11_get_ecdh_method(void)
 		pkcs11_ecdh_method = ECDH_METHOD_new((ECDH_METHOD *)ECDH_OpenSSL());
 		ECDH_METHOD_get_compute_key(pkcs11_ecdh_method, &ossl_ecdh_compute_key);
 		ECDH_METHOD_set_compute_key(pkcs11_ecdh_method, pkcs11_ec_ckey);
+		atexit(pkcs11_ecdh_method_free);
 	}
 	return pkcs11_ecdh_method;
 }
 
 void pkcs11_ecdh_method_free(void)
 {
-	if (pkcs11_ecdh_method) {
+	if (pkcs11_global_data_refs == 0 && pkcs11_ecdh_method) {
 		free_ec_ex_index();
 #if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
 		if (pkcs11_ecdh_method->flags & EC_KEY_METHOD_DYNAMIC)
@@ -896,7 +907,7 @@ PKCS11_OBJECT_ops pkcs11_ec_ops = {
  * require further changes */
 #warning "ECDSA support not built with libp11"
 
-ECDSA_METHOD *PKCS11_get_ecdsa_method(void)
+void *PKCS11_get_ecdsa_method(void)
 {
 	return NULL;
 }

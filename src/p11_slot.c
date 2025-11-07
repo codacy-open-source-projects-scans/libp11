@@ -1,6 +1,6 @@
-/* libp11, a simple layer on to of PKCS#11 API
+/* libp11, a simple layer on top of PKCS#11 API
  * Copyright (C) 2005 Olaf Kirch <okir@lst.de>
- * Copyright (C) 2015-2018 Michał Trojnara <Michal.Trojnara@stunnel.org>
+ * Copyright (C) 2015-2025 Michał Trojnara <Michal.Trojnara@stunnel.org>
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -17,6 +17,7 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307  USA
  */
 
+#define _POSIX_C_SOURCE 200809L
 #include "libp11-int.h"
 #include <string.h>
 #include <openssl/buffer.h>
@@ -116,6 +117,7 @@ int pkcs11_open_session(PKCS11_SLOT_private *slot, int rw)
 	if (rw != slot->rw_mode) {
 		CRYPTOKI_call(ctx, C_CloseAllSessions(slot->id));
 		slot->rw_mode = rw;
+		slot->logged_in = -1;
 	}
 	slot->num_sessions = 0;
 	slot->session_head = slot->session_tail = 0;
@@ -161,9 +163,9 @@ int pkcs11_get_session(PKCS11_SLOT_private *slot, int rw, CK_SESSION_HANDLE *ses
 				slot->num_sessions--;
 				if (slot->num_sessions == 0) {
 					/* Object handles are valid across
-					   sessions, so the cache should only be
-					   cleared when there are no valid
-					   sessions.*/
+					 * sessions, so the cache should only be
+					 * cleared when there are no valid
+					 * sessions.*/
 					pkcs11_wipe_cache(slot);
 				}
 				continue;
@@ -179,8 +181,7 @@ int pkcs11_get_session(PKCS11_SLOT_private *slot, int rw, CK_SESSION_HANDLE *ses
 			if (rv == CKR_OK) {
 				slot->num_sessions++;
 				break;
-			}
-			if (rv == CKR_TOKEN_NOT_RECOGNIZED) {
+			} else {
 				pthread_mutex_unlock(&slot->lock);
 				return -1;
 			}
@@ -317,15 +318,17 @@ int pkcs11_init_token(PKCS11_SLOT_private *slot, const char *pin, const char *la
 			(CK_UTF8CHAR *) ck_label));
 	CRYPTOKI_checkerr(CKR_F_PKCS11_INIT_TOKEN, rv);
 
-	/* FIXME: how to update the token?
-	 * PKCS11_CTX_private *cpriv;
-	 * int n;
-	 * cpriv = PRIVCTX(ctx);
-	 * for (n = 0; n < cpriv->nslots; n++) {
-	 * 	if (pkcs11_check_token(ctx, cpriv->slots + n) < 0)
-	 * 		return -1;
-	 * }
-	 */
+	/* FIXME: how to update the token? */
+#if 0
+	PKCS11_CTX_private *cpriv;
+	int n;
+	cpriv = PRIVCTX(ctx);
+
+	for (n = 0; n < cpriv->nslots; n++) {
+		if (pkcs11_check_token(ctx, cpriv->slots + n) < 0)
+			return -1;
+	}
+#endif
 
 	return 0;
 }

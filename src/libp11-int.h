@@ -1,6 +1,7 @@
-/* libp11, a simple layer on to of PKCS#11 API
+/* libp11, a simple layer on top of PKCS#11 API
  * Copyright (C) 2005 Olaf Kirch <okir@lst.de>
- * Copyright (C) 2015-2018 Michał Trojnara <Michal.Trojnara@stunnel.org>
+ * Copyright (C) 2015-2025 Michał Trojnara <Michal.Trojnara@stunnel.org>
+ * Copyright © 2025 Mobi - Com Polska Sp. z o.o.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -20,8 +21,18 @@
 #ifndef _LIBP11_INT_H
 #define _LIBP11_INT_H
 
-#ifndef _WIN32
+#ifdef _WIN32
+#define LOG_EMERG       0
+#define LOG_ALERT       1
+#define LOG_CRIT        2
+#define LOG_ERR         3
+#define LOG_WARNING     4
+#define LOG_NOTICE      5
+#define LOG_INFO        6
+#define LOG_DEBUG       7
+#else
 #include "config.h"
+#include <syslog.h>
 #endif
 
 /* this code extensively uses deprecated features, so warnings are useless */
@@ -51,8 +62,10 @@ struct pkcs11_ctx_private {
 	CK_VERSION cryptoki_version;
 	UI_METHOD *ui_method; /* UI_METHOD for CKU_CONTEXT_SPECIFIC PINs */
 	void *ui_user_data;
-	unsigned int forkid;
 	pthread_mutex_t fork_lock;
+	unsigned int forkid;
+	int initialized;
+	void (*vlog_a)(int, const char *, va_list); /* for the logging callback */
 };
 #define PRIVCTX(_ctx)		((PKCS11_CTX_private *) ((_ctx)->_private))
 
@@ -108,7 +121,16 @@ struct pkcs11_object_ops {
 };
 
 extern PKCS11_OBJECT_ops pkcs11_rsa_ops;
+
+#ifndef OPENSSL_NO_EC
 extern PKCS11_OBJECT_ops pkcs11_ec_ops;
+# if OPENSSL_VERSION_NUMBER >= 0x30000000L
+extern PKCS11_OBJECT_ops pkcs11_ed25519_ops;
+extern PKCS11_OBJECT_ops pkcs11_ed448_ops;
+# endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
+#endif /* OPENSSL_NO_EC */
+
+extern int pkcs11_global_data_refs;
 
 /*
  * Internal functions
@@ -119,7 +141,6 @@ extern PKCS11_OBJECT_ops pkcs11_ec_ops;
 			CKRerr(f, rv); \
 			return -1; \
 		} \
-		ERR_clear_error(); \
 	} while (0)
 #define CRYPTOKI_call(ctx, func_and_args) \
 	ctx->method->func_and_args
@@ -136,8 +157,14 @@ extern char *pkcs11_strdup(char *, size_t);
 #define EVP_PKEY_get0_EC_KEY(key) ((key)->pkey.ec)
 #endif
 
+extern void pkcs11_log(PKCS11_CTX_private *pctx, int level, const char *format, ...)
+#ifdef __GNUC__
+	__attribute__((format(printf, 3, 4)))
+#endif
+	;
+
 /* Reinitializing the module after fork (if detected) */
-extern unsigned int get_forkid();
+extern unsigned int get_forkid(void);
 extern int check_fork(PKCS11_CTX_private *ctx);
 extern int check_slot_fork(PKCS11_SLOT_private *slot);
 extern int check_object_fork(PKCS11_OBJECT_private *key);
@@ -319,9 +346,19 @@ extern int pkcs11_generate_random(PKCS11_SLOT_private *, unsigned char *r, unsig
 /* Internal implementation of deprecated features */
 
 /* Generate and store a private key on the token */
-extern int pkcs11_generate_key(PKCS11_SLOT_private *tpriv,
-	int algorithm, unsigned int bits,
-	char *label, unsigned char *id, size_t id_len);
+extern int pkcs11_rsa_keygen(PKCS11_SLOT_private *tpriv,
+	unsigned int bits, const char *label, const unsigned char *id,
+	size_t id_len, const PKCS11_params *params);
+
+#ifndef OPENSSL_NO_EC
+extern int pkcs11_ec_keygen(PKCS11_SLOT_private *tpriv,
+	const char *curve , const char *label, const unsigned char *id,
+	size_t id_len, const PKCS11_params *params);
+
+extern int pkcs11_eddsa_keygen(PKCS11_SLOT_private *tpriv,
+	int nid, const char *label, const unsigned char *id,
+	size_t id_len, const PKCS11_params *params);
+#endif /* OPENSSL_NO_EC */
 
 /* Get the RSA key modulus size (in bytes) */
 extern int pkcs11_get_key_size(PKCS11_OBJECT_private *);
@@ -358,11 +395,21 @@ extern PKCS11_OBJECT_private *pkcs11_get_ex_data_rsa(const RSA *rsa);
 /* Set PKCS11_KEY for an RSA key */
 void pkcs11_set_ex_data_rsa(RSA *rsa, PKCS11_OBJECT_private *key);
 
+#ifndef OPENSSL_NO_EC
 /* Retrieve PKCS11_KEY from an EC_KEY */
 extern PKCS11_OBJECT_private *pkcs11_get_ex_data_ec(const EC_KEY *ec);
 
 /* Set PKCS11_KEY for an EC_KEY */
 extern void pkcs11_set_ex_data_ec(EC_KEY *ec, PKCS11_OBJECT_private *key);
+
+# if OPENSSL_VERSION_NUMBER >= 0x30000000L
+/* Retrieve PKCS11_KEY from an EVP_PKEY */
+extern PKCS11_OBJECT_private *pkcs11_get_ex_data_pkey(const EVP_PKEY *pkey);
+# endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
+
+/* Set PKCS11_KEY for an EVP_PKEY */
+extern void pkcs11_set_ex_data_pkey(EVP_PKEY *pkey, PKCS11_OBJECT_private *key);
+#endif /* OPENSSL_NO_EC */
 
 /* Free the global RSA_METHOD */
 extern void pkcs11_rsa_method_free(void);
@@ -375,6 +422,11 @@ extern void pkcs11_ecdsa_method_free(void);
 
 /* Free the global ECDH_METHOD */
 extern void pkcs11_ecdh_method_free(void);
+
+# if OPENSSL_VERSION_NUMBER >= 0x30000000L
+/* Free the global ED25519/ED448 EVP_PKEY_METHOD */
+extern void pkcs11_ed_key_method_free(void);
+# endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
 
 #endif
 

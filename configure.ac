@@ -5,8 +5,8 @@ AC_PREREQ([2.69])
 # When bumping versions see also the LT version numbers below.
 define([PACKAGE_VERSION_MAJOR], [0])
 define([PACKAGE_VERSION_MINOR], [4])
-define([PACKAGE_VERSION_FIX], [13])
-define([PACKAGE_SUFFIX], [])
+define([PACKAGE_VERSION_FIX], [17])
+define([PACKAGE_SUFFIX], [_git])
 
 AC_INIT([libp11],[PACKAGE_VERSION_MAJOR.PACKAGE_VERSION_MINOR.PACKAGE_VERSION_FIX[]PACKAGE_SUFFIX])
 AC_CONFIG_AUX_DIR([.])
@@ -38,6 +38,7 @@ opensslversion="$( \
 case "$opensslversion" in
 	3.*) # Engines directory prefix for OpenSSL 3.x
 	    LIBP11_LT_OLDEST="3"
+	    LIBP11_OSSL_PROVIDER="yes"
 	    debian_ssl_prefix="engines-3";;
 	1.1.*) # Engines directory prefix for OpenSSL 1.1.x
 	    LIBP11_LT_OLDEST="3"
@@ -50,6 +51,13 @@ case "$opensslversion" in
 	    debian_ssl_prefix="ssl/engines";;
 esac
 
+case "$OSSL_PKG_VERSION" in
+	3.*)
+		AC_MSG_NOTICE([3.*])
+		LIBP11_OSSL_PROVIDER="yes";;
+esac
+
+AM_CONDITIONAL([LIBP11_OSSL_PROVIDER], [test x$LIBP11_OSSL_PROVIDER = xyes])
 
 # LT Version numbers, remember to change them just *before* a release.
 #   (Code changed:                      REVISION++)
@@ -60,8 +68,8 @@ esac
 # the openssl version we link to. If the ABI is broken on a later
 # release, we should either stick to supporting a single openssl ABI
 # or bump the LT_OLDEST version sufficiently to avoid clashes.
-LIBP11_LT_REVISION="0"
-LIBP11_LT_CURRENT="9"
+LIBP11_LT_REVISION="2"
+LIBP11_LT_CURRENT="10"
 LIBP11_LT_AGE="$((${LIBP11_LT_CURRENT}-${LIBP11_LT_OLDEST}))"
 
 gl_LD_VERSION_SCRIPT
@@ -149,6 +157,36 @@ AC_ARG_WITH(
 	]
 )
 
+AC_ARG_ENABLE(
+	[static-engine],
+	[AS_HELP_STRING([--enable-static-engine], [enable static engine (libpkcs11.a) build @<:@disabled@:>@])],
+	,
+	[enable_static_engine="no"]
+)
+
+AC_ARG_WITH(
+	[modulesdir],
+	[AS_HELP_STRING([--with-modulesdir], [OpenSSL3 providers directory])],
+	[providersexecdir="${withval}"],
+	[
+		providersexecdir="`$PKG_CONFIG --variable=modulesdir --silence-errors libcrypto`"
+		if test "${providersexecdir}" = ""; then
+		    libcryptodir="`$PKG_CONFIG --variable=libdir --silence-errors libcrypto || \
+			$PKG_CONFIG --variable=libdir openssl`"
+		    if test -d "$libcryptodir/$debian_ssl_prefix"; then
+			# Debian-based OpenSSL package (for example Ubuntu)
+			providersexecdir="$libcryptodir/$debian_ssl_prefix"
+		    else # Default OpenSSL providers directory
+			providersexecdir="$libcryptodir/ossl-modules"
+		    fi
+		    if test "${prefix}" != "NONE" -o "${exec_prefix}" != "NONE"; then
+			# Override the autodetected value with the default
+			providersexecdir="\$(libdir)"
+		    fi
+		fi
+	]
+)
+
 AC_ARG_WITH(
 	[pkcs11-module],
 	[AS_HELP_STRING([--with-pkcs11-module], [default PKCS11 module])],
@@ -194,9 +232,9 @@ fi
 
 PKG_CHECK_MODULES(
 	[OPENSSL],
-	[libcrypto >= 0.9.8],
+	[libcrypto >= 1.0.2],
 	,
-	[AC_MSG_ERROR([libcrypto >= 0.9.8 is required])]
+	[AC_MSG_ERROR([libcrypto >= 1.0.2 is required])]
 )
 
 AC_CHECK_FUNCS([ X509_get0_notAfter X509_get0_notBefore ])
@@ -213,6 +251,7 @@ pkgconfigdir="\$(libdir)/pkgconfig"
 AC_SUBST([pkgconfigdir])
 AC_SUBST([apidocdir])
 AC_SUBST([enginesexecdir])
+AC_SUBST([providersexecdir])
 AC_SUBST([LIBP11_VERSION_MAJOR])
 AC_SUBST([LIBP11_VERSION_MINOR])
 AC_SUBST([LIBP11_VERSION_FIX])
@@ -226,6 +265,7 @@ AC_SUBST([SHARED_EXT], $(eval echo "${shrext_cmds}"))
 AM_CONDITIONAL([WIN32], [test "${WIN32}" = "yes"])
 AM_CONDITIONAL([CYGWIN], [test "${CYGWIN}" = "yes"])
 AM_CONDITIONAL([ENABLE_API_DOC], [test "${enable_api_doc}" = "yes"])
+AM_CONDITIONAL([ENABLE_STATIC_ENGINE], [test "${enable_static_engine}" = "yes"])
 
 if test "${enable_pedantic}" = "yes"; then
 	enable_strict="yes";
@@ -254,10 +294,12 @@ AC_CONFIG_FILES([
 	src/libp11.pc
 	src/libp11.rc
 	src/pkcs11.rc
+	src/pkcs11prov.rc
 	doc/Makefile
 	doc/doxygen.conf
 	examples/Makefile
 	tests/Makefile
+	.github/workflows/ci.yml
 ])
 AC_OUTPUT
 
@@ -281,8 +323,10 @@ libp11 has been configured with the following options:
 Version:                 ${PACKAGE_VERSION}
 libp11 directory:        $(eval eval eval echo "${libdir}")
 Engine directory:        ${enginesexecdir}
+Provider directory:      ${providersexecdir}
 Default PKCS11 module:   ${pkcs11_module}
 API doc support:         ${enable_api_doc}
+Static PKCS#11 engine    ${enable_static_engine}
 
 Host:                    ${host}
 Compiler:                ${CC}

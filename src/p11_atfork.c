@@ -1,7 +1,7 @@
-/* libp11, a simple layer on to of PKCS#11 API
+/* libp11, a simple layer on top of PKCS#11 API
  * Copyright (C) 2010-2012 Free Software Foundation, Inc.
  * Copyright (C) 2014 Red Hat
- * Copyright (C) 2018 Michał Trojnara <Michal.Trojnara@stunnel.org>
+ * Copyright (C) 2018-2025 Michał Trojnara <Michal.Trojnara@stunnel.org>
  *
  * Author: Nikos Mavrogiannopoulos
  *
@@ -82,7 +82,7 @@ static unsigned int _P11_update_forkid(void)
 
 unsigned int get_forkid()
 {
-	_P11_update_forkid();
+	(void)_P11_update_forkid();
 	return P11_forkid;
 }
 

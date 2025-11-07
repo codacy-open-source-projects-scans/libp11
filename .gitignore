@@ -61,6 +61,12 @@ examples/auth
 examples/decrypt
 examples/getrandom
 examples/listkeys
+examples/listkeys_ext
+examples/eckeygen
+examples/rsakeygen
+examples/ed25519keygen
+examples/ed448keygen
+examples/storecert
 
 test-driver
 tests/openssl_version
@@ -70,8 +76,25 @@ tests/evp-sign
 tests/fork-change-slot
 tests/rsa-oaep
 tests/rsa-pss-sign
+tests/check-privkey
+tests/dup-key
+tests/check-privkey-prov
+tests/dup-key-prov
+tests/evp-sign-prov
+tests/fork-change-slot-prov
+tests/rsa-oaep-prov
+tests/rsa-pss-sign-prov
+tests/rsa-keygen
+tests/ec-keygen
+tests/ed25519-keygen
+tests/ed448-keygen
+tests/ed25519-keygen-prov
+tests/ed448-keygen-prov
+tests/check-all-prov
+
 tests/*.log
 tests/*.trs
+tests/*.a
 tests/output.*
 
 doc/doxygen.conf

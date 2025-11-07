@@ -58,7 +58,9 @@ int main(int argc, char *argv[])
 {
 	ENGINE *engine = NULL;
 	EVP_PKEY *pkey = NULL;
+#ifndef OPENSSL_NO_EC
 	EC_KEY *ec = NULL, *ec_dup = NULL;
+#endif /* OPENSSL_NO_EC */
 
 	const char *module, *efile, *privkey;
 
@@ -103,7 +105,7 @@ int main(int argc, char *argv[])
 		goto end;
 	}
 
-	if (!ENGINE_ctrl_cmd_string(engine, "VERBOSE", NULL, 0)) {
+	if (!ENGINE_ctrl_cmd_string(engine, "DEBUG_LEVEL", "7", 0)) {
 		display_openssl_errors(__LINE__);
 		exit(1);
 	}
@@ -138,6 +140,7 @@ int main(int argc, char *argv[])
 	case EVP_PKEY_RSA:
 		/* TODO */
 		break;
+#ifndef OPENSSL_NO_EC
 	case EVP_PKEY_EC:
 		ec = EVP_PKEY_get1_EC_KEY(pkey);
 		if (ec == NULL) {
@@ -157,6 +160,7 @@ int main(int argc, char *argv[])
 		EC_KEY_free(ec);
 		EC_KEY_free(ec_dup);
 		break;
+#endif /* OPENSSL_NO_EC */
 	}
 
 	EVP_PKEY_free(pkey);
@@ -181,3 +185,4 @@ end:
 	return ret;
 }
 
+/* vim: set noexpandtab: */

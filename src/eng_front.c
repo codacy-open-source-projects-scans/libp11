@@ -5,7 +5,7 @@
  * Portions Copyright (c) 2003 Kevin Stefanik (kstef@mtppi.org)
  * Copied/modified by Kevin Stefanik (kstef@mtppi.org) for the OpenSC
  * project 2003.
- * Copyright (c) 2016-2018 Michał Trojnara <Michal.Trojnara@stunnel.org>
+ * Copyright (c) 2016-2025 Michał Trojnara <Michal.Trojnara@stunnel.org>
  *
  * Licensed under the OpenSSL license (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -29,7 +29,6 @@
 #define PKCS11_ENGINE_NAME "pkcs11 engine"
 
 static int pkcs11_idx = -1;
-static int shutdown_mode = 0;
 
 /* The definitions for control commands specific to this engine */
 
@@ -46,7 +45,7 @@ static const ENGINE_CMD_DEFN engine_cmd_defns[] = {
 		ENGINE_CMD_FLAG_STRING},
 	{CMD_PIN,
 		"PIN",
-		"Specifies the pin code",
+		"Specifies the PIN",
 		ENGINE_CMD_FLAG_STRING},
 	{CMD_VERBOSE,
 		"VERBOSE",
@@ -80,12 +79,24 @@ static const ENGINE_CMD_DEFN engine_cmd_defns[] = {
 		"RE_ENUMERATE",
 		"re enumerate slots",
 		ENGINE_CMD_FLAG_NO_INPUT},
+	{CMD_VLOG_A,
+		"VLOG_A",
+		"Set the logging callback",
+		ENGINE_CMD_FLAG_INTERNAL},
+	{CMD_DEBUG_LEVEL,
+		"DEBUG_LEVEL",
+		"Set the debug level: 0=emerg, 1=alert, 2=crit, 3=err, 4=warning, 5=notice (default), 6=info, 7=debug",
+		ENGINE_CMD_FLAG_NUMERIC},
+	{CMD_KEYGEN,
+		"KEYGEN",
+		"Generate asymmetric key pair",
+		ENGINE_CMD_FLAG_INTERNAL},
 	{0, NULL, NULL, 0}
 };
 
 static int bind_helper_methods(ENGINE *e);
 
-static ENGINE_CTX *get_ctx(ENGINE *engine)
+static ENGINE_CTX *ENGINE_CTX_get(ENGINE *engine)
 {
 	ENGINE_CTX *ctx;
 
@@ -98,23 +109,23 @@ static ENGINE_CTX *get_ctx(ENGINE *engine)
 		ctx = ENGINE_get_ex_data(engine, pkcs11_idx);
 	}
 	if (!ctx) {
-		ctx = ctx_new();
+		ctx = ENGINE_CTX_new();
 		ENGINE_set_ex_data(engine, pkcs11_idx, ctx);
 	}
 	return ctx;
 }
 
-/* Destroy the context allocated with ctx_new() */
+/* Destroy the context allocated with ENGINE_CTX_new() */
 static int engine_destroy(ENGINE *engine)
 {
 	ENGINE_CTX *ctx;
 	int rv = 1;
 
-	ctx = get_ctx(engine);
+	ctx = ENGINE_CTX_get(engine);
 	if (!ctx)
 		return 0;
 
-	rv &= ctx_destroy(ctx);
+	rv &= ENGINE_CTX_destroy(ctx);
 	ENGINE_set_ex_data(engine, pkcs11_idx, NULL);
 	ERR_unload_ENG_strings();
 	return rv;
@@ -124,53 +135,46 @@ static int engine_init(ENGINE *engine)
 {
 	ENGINE_CTX *ctx;
 
-	ctx = get_ctx(engine);
+	ctx = ENGINE_CTX_get(engine);
 	if (!ctx)
 		return 0;
-	return ctx_init(ctx);
+	return ENGINE_CTX_init(ctx);
 }
 
-/* Finish engine operations initialized with ctx_init() */
+/* Finish engine operations initialized with ENGINE_CTX_init() */
 static int engine_finish(ENGINE *engine)
 {
 	ENGINE_CTX *ctx;
 	int rv = 1;
 
-	ctx = get_ctx(engine);
+	ctx = ENGINE_CTX_get(engine);
 	if (!ctx)
 		return 0;
 
-	/* PKCS#11 modules that register their own atexit() callbacks may
-	 * already have been cleaned up by the time OpenSSL's atexit() callback
-	 * is executed. As a result, a crash occurs with certain versions of
-	 * OpenSSL and SoftHSM2. The workaround skips the execution of
-	 * ctx_finish() during OpenSSL's cleanup, converting the crash into
-	 * a harmless memory leak at exit. */
-	if (!shutdown_mode)
-		rv &= ctx_finish(ctx);
+	rv &= ENGINE_CTX_finish(ctx);
 
 	return rv;
 }
 
 static EVP_PKEY *load_pubkey(ENGINE *engine, const char *s_key_id,
-		UI_METHOD *ui_method, void *callback_data)
+		UI_METHOD *ui_method, void *ui_data)
 {
 	ENGINE_CTX *ctx;
 
-	ctx = get_ctx(engine);
+	ctx = ENGINE_CTX_get(engine);
 	if (!ctx)
 		return 0;
 	bind_helper_methods(engine);
-	return ctx_load_pubkey(ctx, s_key_id, ui_method, callback_data);
+	return ENGINE_CTX_load_pubkey(ctx, s_key_id, ui_method, ui_data);
 }
 
 static EVP_PKEY *load_privkey(ENGINE *engine, const char *s_key_id,
-		UI_METHOD *ui_method, void *callback_data)
+		UI_METHOD *ui_method, void *ui_data)
 {
 	ENGINE_CTX *ctx;
 	EVP_PKEY *pkey;
 
-	ctx = get_ctx(engine);
+	ctx = ENGINE_CTX_get(engine);
 	if (!ctx)
 		return 0;
 	bind_helper_methods(engine);
@@ -192,15 +196,15 @@ static EVP_PKEY *load_privkey(ENGINE *engine, const char *s_key_id,
 				(ver >= 0x30100040L && ver <= 0x30100050L) ||
 				(ver >= 0x30200000L && ver <= 0x30200010L)) {
 			if (ENGINE_set_default_string(engine, "PKEY_CRYPTO")) {
-				fprintf(stderr, "Workaround for %s enabled\n",
+				ENGINE_CTX_log(ctx, LOG_NOTICE, "Workaround for %s enabled\n",
 					OpenSSL_version(OPENSSL_VERSION));
 			} else {
-				fprintf(stderr, "Failed to set PKEY_CRYPTO default engine\n");
+				ENGINE_CTX_log(ctx, LOG_WARNING, "Failed to set PKEY_CRYPTO default engine\n");
 			}
 		}
 	}
 #endif
-	pkey = ctx_load_privkey(ctx, s_key_id, ui_method, callback_data);
+	pkey = ENGINE_CTX_load_privkey(ctx, s_key_id, ui_method, ui_data);
 #ifdef EVP_F_EVP_PKEY_SET1_ENGINE
 	/* EVP_PKEY_set1_engine() is required for OpenSSL 1.1.x,
 	 * but otherwise setting pkey->engine breaks OpenSSL 1.0.2 */
@@ -212,17 +216,17 @@ static EVP_PKEY *load_privkey(ENGINE *engine, const char *s_key_id,
 	return pkey;
 }
 
-static int engine_ctrl(ENGINE *engine, int cmd, long i, void *p, void (*f) ())
+static int engine_ctrl(ENGINE *engine, int cmd, long i, void *p, void (*f) (void))
 {
 	ENGINE_CTX *ctx;
 
-	ctx = get_ctx(engine);
+	ctx = ENGINE_CTX_get(engine);
 	if (!ctx)
 		return 0;
 #if OPENSSL_VERSION_NUMBER < 0x30000000L
 	bind_helper_methods(engine);
 #endif
-	return ctx_engine_ctrl(ctx, cmd, i, p, f);
+	return ENGINE_CTX_ctrl(ctx, cmd, i, p, f);
 }
 
 /* This internal function is used by ENGINE_pkcs11() and possibly by the
@@ -277,22 +281,16 @@ static int bind_helper_methods(ENGINE *e)
 	}
 }
 
-static void exit_callback(void)
-{
-	shutdown_mode = 1;
-}
-
 static int bind_fn(ENGINE *e, const char *id)
 {
 	if (id && (strcmp(id, PKCS11_ENGINE_ID) != 0)) {
-		fprintf(stderr, "bad engine id\n");
+		ENGINE_CTX_log(NULL, LOG_ERR, "bad engine id\n");
 		return 0;
 	}
 	if (!bind_helper(e)) {
-		fprintf(stderr, "bind failed\n");
+		ENGINE_CTX_log(NULL, LOG_ERR, "bind failed\n");
 		return 0;
 	}
-	atexit(exit_callback);
 	return 1;
 }
 

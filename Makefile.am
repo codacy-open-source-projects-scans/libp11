@@ -1,6 +1,11 @@
 AUTOMAKE_OPTIONS = foreign 1.10
 ACLOCAL_AMFLAGS = -I m4
 
+# prevent "make distcheck" from requiring root privileges
+DISTCHECK_CONFIGURE_FLAGS = \
+	--with-enginesdir='$(abs_top_builddir)/$(distdir)/_inst/lib/engines' \
+	--with-modulesdir='$(abs_top_builddir)/$(distdir)/_inst/lib/ossl-modules'
+
 MAINTAINERCLEANFILES = \
 	config.log config.status \
 	$(srcdir)/configure $(srcdir)/Makefile.in \
@@ -11,7 +16,7 @@ MAINTAINERCLEANFILES = \
 	$(srcdir)/m4/ltversion.m4 $(srcdir)/m4/lt~obsolete.m4 \
 	$(srcdir)/m4/ltoptions.m4 \
 	$(srcdir)/packaged
-EXTRA_DIST = Makefile.mak make.rules.mak README.md
+EXTRA_DIST = Makefile.mak make.rules.mak README.md .github/workflows/ci.yml.in
 
 dist_noinst_DATA = COPYING INSTALL.md
 
