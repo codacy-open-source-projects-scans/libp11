@@ -31,6 +31,8 @@
 #include <openssl/pem.h>
 #include <openssl/err.h>
 
+#ifndef OPENSSL_NO_ENGINE
+
 static void usage(char *argv[])
 {
 	fprintf(stderr, "%s [certificate (PEM or URL)] [private key URL] "
@@ -187,5 +189,16 @@ end:
 
 	return ret;
 }
+
+#else /* OPENSSL_NO_ENGINE */
+
+#include <stdio.h>
+
+int main() {
+	fprintf(stderr, "Skipped: ENGINE support not available\n");
+	return 77;
+}
+
+#endif /* OPENSSL_NO_ENGINE */
 
 /* vim: set noexpandtab: */

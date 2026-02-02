@@ -21,6 +21,9 @@
 #include <openssl/crypto.h>
 #include <openssl/objects.h>
 #include <openssl/engine.h>
+
+#ifndef OPENSSL_NO_ENGINE
+
 #ifndef ENGINE_CMD_BASE
 #error did not get engine.h
 #endif
@@ -296,5 +299,7 @@ static int bind_fn(ENGINE *e, const char *id)
 
 IMPLEMENT_DYNAMIC_CHECK_FN()
 IMPLEMENT_DYNAMIC_BIND_FN(bind_fn)
+
+#endif /* OPENSSL_NO_ENGINE */
 
 /* vim: set noexpandtab: */

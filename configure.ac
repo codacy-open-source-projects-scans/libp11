@@ -5,7 +5,7 @@ AC_PREREQ([2.69])
 # When bumping versions see also the LT version numbers below.
 define([PACKAGE_VERSION_MAJOR], [0])
 define([PACKAGE_VERSION_MINOR], [4])
-define([PACKAGE_VERSION_FIX], [17])
+define([PACKAGE_VERSION_FIX], [18])
 define([PACKAGE_SUFFIX], [_git])
 
 AC_INIT([libp11],[PACKAGE_VERSION_MAJOR.PACKAGE_VERSION_MINOR.PACKAGE_VERSION_FIX[]PACKAGE_SUFFIX])
@@ -36,6 +36,9 @@ opensslversion="$( \
     $PKG_CONFIG --modversion openssl ) | \
     sed 's/^\([0-9.]*\).*/\1/' )"
 case "$opensslversion" in
+	4.*) # Provider for OpenSSL 4.x
+	    LIBP11_LT_OLDEST="4"
+	    LIBP11_OSSL_PROVIDER="yes";;
 	3.*) # Engines directory prefix for OpenSSL 3.x
 	    LIBP11_LT_OLDEST="3"
 	    LIBP11_OSSL_PROVIDER="yes"
@@ -68,7 +71,7 @@ AM_CONDITIONAL([LIBP11_OSSL_PROVIDER], [test x$LIBP11_OSSL_PROVIDER = xyes])
 # the openssl version we link to. If the ABI is broken on a later
 # release, we should either stick to supporting a single openssl ABI
 # or bump the LT_OLDEST version sufficiently to avoid clashes.
-LIBP11_LT_REVISION="2"
+LIBP11_LT_REVISION="3"
 LIBP11_LT_CURRENT="10"
 LIBP11_LT_AGE="$((${LIBP11_LT_CURRENT}-${LIBP11_LT_OLDEST}))"
 

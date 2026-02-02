@@ -22,6 +22,8 @@
 #include <openssl/engine.h>
 #include <openssl/pem.h>
 
+#ifndef OPENSSL_NO_ENGINE
+
 static void display_openssl_errors(int l)
 {
 	const char* file;
@@ -225,5 +227,16 @@ cleanup:
 
 	return ret;
 }
+
+#else /* OPENSSL_NO_ENGINE */
+
+#include <stdio.h>
+
+int main() {
+	fprintf(stderr, "Skipped: ENGINE support not available\n");
+	return 77;
+}
+
+#endif /* OPENSSL_NO_ENGINE */
 
 /* vim: set noexpandtab: */
