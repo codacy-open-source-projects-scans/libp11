@@ -56,6 +56,7 @@ typedef struct pkcs11_object_ops PKCS11_OBJECT_ops;
  * PKCS11_CTX: context for a PKCS11 implementation
  */
 struct pkcs11_ctx_private {
+	int flags;
 	CK_FUNCTION_LIST_PTR method;
 	void *handle;
 	char *init_args;
@@ -111,6 +112,7 @@ struct pkcs11_object_private {
 	unsigned int forkid;
 	int refcnt;
 	pthread_mutex_t lock;
+	PKCS11_KEY *public; /* our current public object */
 };
 #define PRIVKEY(_key)		((PKCS11_OBJECT_private *) (_key)->_private)
 #define PRIVCERT(_cert)		((PKCS11_OBJECT_private *) (_cert)->_private)
@@ -210,7 +212,7 @@ extern void pkcs11_zap_attrs(PKCS11_TEMPLATE *);
 extern int pkcs11_atomic_add(int *, int, pthread_mutex_t *);
 
 /* Allocate the context */
-extern PKCS11_CTX *pkcs11_CTX_new(void);
+extern PKCS11_CTX *pkcs11_CTX_new(int flags);
 
 /* Specify any private PKCS#11 module initialization args, if necessary */
 extern void pkcs11_CTX_init_args(PKCS11_CTX *ctx, const char *init_args);
@@ -302,6 +304,11 @@ extern PKCS11_CERT *pkcs11_find_certificate(PKCS11_OBJECT_private *key);
 /* Find the corresponding key (if any) */
 extern PKCS11_KEY *pkcs11_find_key(PKCS11_OBJECT_private *cert);
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+/* Return the PKCS11_KEY handle associated with the given EVP_PKEY */
+extern PKCS11_KEY *pkcs11_get_pkcs11_key(const EVP_PKEY *pk);
+#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
+
 /* Get a list of all certificates matching with template associated with this token */
 extern int pkcs11_enumerate_certs(PKCS11_SLOT_private *,
 	const PKCS11_CERT *cert_template, PKCS11_CERT **certs, unsigned int *ncerts);
@@ -352,11 +359,13 @@ extern int pkcs11_rsa_keygen(PKCS11_SLOT_private *tpriv,
 extern int pkcs11_ec_keygen(PKCS11_SLOT_private *tpriv,
 	const char *curve , const char *label, const unsigned char *id,
 	size_t id_len, const PKCS11_params *params);
+#endif /* OPENSSL_NO_EC */
 
+#if !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L
 extern int pkcs11_eddsa_keygen(PKCS11_SLOT_private *tpriv,
 	int nid, const char *label, const unsigned char *id,
 	size_t id_len, const PKCS11_params *params);
-#endif /* OPENSSL_NO_EC */
+#endif /* !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L */
 
 /* Get the RSA key modulus size (in bytes) */
 extern int pkcs11_get_key_size(PKCS11_OBJECT_private *);
@@ -371,6 +380,32 @@ extern int pkcs11_get_key_exponent(PKCS11_OBJECT_private *, BIGNUM **);
 extern int pkcs11_sign(int type,
 	const unsigned char *m, unsigned int m_len,
 	unsigned char *sigret, unsigned int *siglen, PKCS11_OBJECT_private *key);
+
+/* Sign input data using RSA private key via PKCS#11 mechanism */
+extern int pkcs11_evp_pkey_rsa_sign(PKCS11_OBJECT_private *key, EVP_PKEY *pkey,
+	const char *mdname, const int pad_mode, const int salt_len,
+	const char *mgf1_mdname, unsigned char *oaep_label, const int oaep_labellen,
+	unsigned char *sig, size_t *siglen,
+	const unsigned char *tbs, size_t tbslen);
+
+#ifndef OPENSSL_NO_EC
+/* Sign digest input with EC private key via PKCS#11 and encode signature as DER */
+extern int pkcs11_evp_pkey_ec_sign(PKCS11_OBJECT_private *key,
+	unsigned char *sig, size_t *siglen,
+	const unsigned char *tbs, size_t tbslen);
+#endif /* OPENSSL_NO_EC */
+
+/* Sign message input with EdDSA private key via PKCS#11 mechanism */
+extern int pkcs11_evp_pkey_eddsa_sign(PKCS11_OBJECT_private *key,
+	unsigned char *sig, size_t *siglen,
+	const unsigned char *tbs, size_t tbslen);
+
+/* Decrypt RSA input via PKCS#11 using configured padding and OAEP parameters */
+extern int pkcs11_evp_pkey_rsa_decrypt(PKCS11_OBJECT_private *key, EVP_PKEY *pkey,
+	const char *mdname, const int pad_mode,
+	const char *mgf1_mdname, unsigned char *oaep_label, const int oaep_labellen,
+	unsigned char *out, size_t *outlen,
+	size_t *outsize, const unsigned char *in, size_t inlen);
 
 /* This function has never been implemented */
 extern int pkcs11_verify(int type,
@@ -409,11 +444,22 @@ extern void pkcs11_set_ex_data_pkey(EVP_PKEY *pkey, PKCS11_OBJECT_private *key);
 extern PKCS11_OBJECT_private *pkcs11_get_ex_data_pkey(const EVP_PKEY *pkey);
 
 /* Allocate a global EVP_PKEY ex_data index */
-void alloc_pkey_ex_index(void);
+extern void alloc_pkey_ex_index(void);
 
 /* Free the allocated EVP_PKEY ex_data index. */
-void free_pkey_ex_index(void);
+extern void free_pkey_ex_index(void);
 # endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L && OPENSSL_VERSION_NUMBER < 0x40000000L */
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+/* Free the allocated EVP_PKEY ex_data index. */
+extern void free_evp_pkey_ex_index(void);
+#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
+
+/* Convert an OpenSSL digest (EVP_MD) to the corresponding PKCS#11 hash mechanism */
+extern CK_MECHANISM_TYPE pkcs11_md2ckm(const EVP_MD *md);
+
+/* Convert an OpenSSL digest (EVP_MD) to the corresponding PKCS#11 MGF1 identifier */
+extern CK_RSA_PKCS_MGF_TYPE pkcs11_md2ckg(const EVP_MD *md);
 
 /* Free the global RSA_METHOD */
 extern void pkcs11_rsa_method_free(void);
@@ -427,10 +473,10 @@ extern void pkcs11_ecdsa_method_free(void);
 /* Free the global ECDH_METHOD */
 extern void pkcs11_ecdh_method_free(void);
 
-# if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#if !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L && OPENSSL_VERSION_NUMBER < 0x40000000L
 /* Free the global ED25519/ED448 EVP_PKEY_METHOD */
 extern void pkcs11_ed_key_method_free(void);
-# endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
+#endif /* !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L && OPENSSL_VERSION_NUMBER < 0x40000000L */
 
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L && OPENSSL_VERSION_NUMBER < 0x40000000L
 /* Free the global RSA EVP_PKEY_METHOD */

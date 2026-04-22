@@ -1,4 +1,5 @@
 PKCS11_CTX_init_args
+PKCS11_CTX_new_ex
 PKCS11_CTX_new
 PKCS11_CTX_load
 PKCS11_CTX_unload
@@ -37,6 +38,8 @@ PKCS11_store_private_key
 PKCS11_store_public_key
 PKCS11_store_certificate
 PKCS11_sign
+PKCS11_evp_pkey_sign
+PKCS11_evp_pkey_decrypt
 PKCS11_private_encrypt
 PKCS11_private_decrypt
 PKCS11_verify

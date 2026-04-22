@@ -26,6 +26,10 @@
 /* The maximum length of PIN */
 #define MAX_PIN_LENGTH   256
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+static int evp_pkey_ex_index = 0;
+#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
+
 #if OPENSSL_VERSION_NUMBER < 0x40000000L
 # if OPENSSL_VERSION_NUMBER >= 0x30000000L
 static int pkey_ex_index = 0;
@@ -47,8 +51,7 @@ static int (*orig_pkey_rsa_decrypt) (EVP_PKEY_CTX *ctx,
 	const unsigned char *in, size_t inlen);
 #endif /* OPENSSL_VERSION_NUMBER < 0x40000000L */
 
-#if OPENSSL_VERSION_NUMBER >= 0x30000000L
-# ifndef OPENSSL_NO_EC
+#if !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L
 /* DER OIDs */
 static const unsigned char OID_ED25519[] = { 0x06, 0x03, 0x2B, 0x65, 0x70 };
 static const unsigned char OID_ED448[]   = { 0x06, 0x03, 0x2B, 0x65, 0x71 };
@@ -62,8 +65,7 @@ static const unsigned char STR_ED448[] = {
     0x13, 0x0A, /* tag + length */
     'e','d','w','a','r','d','s','4','4','8'
 };
-# endif /* OPENSSL_NO_EC */
-#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
+#endif /* !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L */
 
 #if OPENSSL_VERSION_NUMBER < 0x100020d0L || defined(LIBRESSL_VERSION_NUMBER)
 struct evp_pkey_method_st {
@@ -119,6 +121,12 @@ static void pkcs11_common_pubkey_attr(PKCS11_TEMPLATE *, const char *,
 	const unsigned char *, size_t);
 static void pkcs11_common_privkey_attr(PKCS11_TEMPLATE *, const char *,
 	const unsigned char *, size_t, const PKCS11_params *);
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+static void pkcs11_set_ex_data_evp_pkey(EVP_PKEY *pkey, PKCS11_KEY *key);
+static PKCS11_KEY *pkcs11_get_ex_data_evp_pkey(const EVP_PKEY *pkey);
+static void alloc_evp_pkey_ex_index(void);
+#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
 
 /* Helper to acquire object handle from given template */
 static CK_OBJECT_HANDLE pkcs11_handle_from_template(PKCS11_SLOT_private *slot,
@@ -179,7 +187,8 @@ PKCS11_OBJECT_private *pkcs11_object_from_handle(PKCS11_SLOT_private *slot,
 		case CKK_EC:
 			ops = &pkcs11_ec_ops;
 			break;
-# if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#endif /* OPENSSL_NO_EC */
+#if !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L
 		case CKK_EC_EDWARDS:
 			/* Read the CKA_EC_PARAMS to distinguish Ed25519 vs Ed448 */
 			if (pkcs11_getattr_alloc(ctx, session, object,
@@ -204,8 +213,7 @@ PKCS11_OBJECT_private *pkcs11_object_from_handle(PKCS11_SLOT_private *slot,
 			}
 			OPENSSL_free(data);
 			break;
-# endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
-#endif /* OPENSSL_NO_EC */
+#endif /* !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L */
 		default:
 			/* Ignore any keys we don't understand */
 			pkcs11_log(ctx, LOG_DEBUG,
@@ -509,8 +517,9 @@ int pkcs11_ec_keygen(PKCS11_SLOT_private *slot, const char *curve,
 	CRYPTOKI_checkerr(CKR_F_PKCS11_GENERATE_KEY, rv);
 	return 0;
 }
+#endif /* OPENSSL_NO_EC */
 
-# if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#if !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L
 /**
  * Generate EdDSA (Ed25519 / Ed448) key pair directly on token
  */
@@ -566,8 +575,7 @@ int pkcs11_eddsa_keygen(PKCS11_SLOT_private *slot,
 	CRYPTOKI_checkerr(CKR_F_PKCS11_GENERATE_KEY, rv);
 	return 0;
 }
-# endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
-#endif /* OPENSSL_NO_EC */
+#endif /* !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L */
 
 /*
  * Store a private key on the token
@@ -763,18 +771,32 @@ EVP_PKEY *pkcs11_get_key(PKCS11_OBJECT_private *key0, CK_OBJECT_CLASS object_cla
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
 	case EVP_PKEY_ED25519:
 	case EVP_PKEY_ED448:
-		ret = key->evp_key;
-		EVP_PKEY_up_ref(key->evp_key);
+		ret = EVP_PKEY_dup(key->evp_key);
 		break;
 #endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
 	default:
 		pkcs11_log(key0->slot->ctx, LOG_DEBUG, "Unsupported key type\n");
 	}
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	if (key->object_class == CKO_PRIVATE_KEY) {
+		alloc_evp_pkey_ex_index();
+		pkcs11_set_ex_data_evp_pkey(ret, key->public);
+	}
+#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
 err:
 	if (key != key0)
 		pkcs11_object_free(key);
 	return ret;
 }
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+/* Returns the PKCS11_KEY handle associated with the given EVP_PKEY */
+PKCS11_KEY *pkcs11_get_pkcs11_key(const EVP_PKEY *pk)
+{
+	return pkcs11_get_ex_data_evp_pkey(pk);
+}
+#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
 
 /*
  * Authenticate a private the key operation if needed
@@ -974,9 +996,70 @@ static int pkcs11_init_key(PKCS11_SLOT_private *slot, CK_SESSION_HANDLE session,
 	key->label = kpriv->label;
 	key->isPrivate = (type == CKO_PRIVATE_KEY);
 
+	/* Link back */
+	kpriv->public = key;
+
 	if (ret)
 		*ret = key;
 	return 0;
+}
+
+/* Convert an OpenSSL digest (EVP_MD) to the corresponding PKCS#11 hash mechanism */
+CK_MECHANISM_TYPE pkcs11_md2ckm(const EVP_MD *md)
+{
+	switch (EVP_MD_type(md)) {
+	case NID_sha1:
+		return CKM_SHA_1;
+	case NID_sha224:
+		return CKM_SHA224;
+	case NID_sha256:
+		return CKM_SHA256;
+	case NID_sha512:
+		return CKM_SHA512;
+	case NID_sha384:
+		return CKM_SHA384;
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L && !defined(LIBRESSL_VERSION_NUMBER)
+	case NID_sha3_224:
+		return CKM_SHA3_224;
+	case NID_sha3_256:
+		return CKM_SHA3_256;
+	case NID_sha3_384:
+		return CKM_SHA3_384;
+	case NID_sha3_512:
+		return CKM_SHA3_512;
+#endif
+	default:
+		return 0;
+	}
+}
+
+/* Convert an OpenSSL digest (EVP_MD) to the corresponding PKCS#11 MGF1 identifier */
+CK_RSA_PKCS_MGF_TYPE pkcs11_md2ckg(const EVP_MD *md)
+{
+	switch (EVP_MD_type(md)) {
+	case NID_sha1:
+		return CKG_MGF1_SHA1;
+	case NID_sha224:
+		return CKG_MGF1_SHA224;
+	case NID_sha256:
+		return CKG_MGF1_SHA256;
+	case NID_sha512:
+		return CKG_MGF1_SHA512;
+	case NID_sha384:
+		return CKG_MGF1_SHA384;
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L && !defined(LIBRESSL_VERSION_NUMBER)
+	case NID_sha3_224:
+		return CKG_MGF1_SHA3_224;
+	case NID_sha3_256:
+		return CKG_MGF1_SHA3_256;
+	case NID_sha3_384:
+		return CKG_MGF1_SHA3_384;
+	case NID_sha3_512:
+		return CKG_MGF1_SHA3_512;
+#endif
+	default:
+		return 0;
+	}
 }
 
 static int pkcs11_init_keygen(PKCS11_SLOT_private *slot, CK_SESSION_HANDLE *session)
@@ -1045,6 +1128,38 @@ void pkcs11_destroy_keys(PKCS11_SLOT_private *slot, unsigned int type)
 	keys->num = 0;
 }
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+static void pkcs11_set_ex_data_evp_pkey(EVP_PKEY *pkey, PKCS11_KEY *key)
+{
+	EVP_PKEY_set_ex_data(pkey, evp_pkey_ex_index, key);
+}
+
+static PKCS11_KEY *pkcs11_get_ex_data_evp_pkey(const EVP_PKEY *pkey)
+{
+	return EVP_PKEY_get_ex_data(pkey, evp_pkey_ex_index);
+}
+
+static void alloc_evp_pkey_ex_index(void)
+{
+	if (evp_pkey_ex_index == 0) {
+		while (evp_pkey_ex_index == 0) /* Workaround for OpenSSL RT3710 */
+			evp_pkey_ex_index = EVP_PKEY_get_ex_new_index(0, "libp11 EVP_PKEY",
+				NULL, NULL, NULL);
+		if (evp_pkey_ex_index < 0)
+			evp_pkey_ex_index = 0; /* Fallback to app_data */
+	}
+}
+
+void free_evp_pkey_ex_index(void)
+{
+	if (evp_pkey_ex_index > 0) {
+		CRYPTO_free_ex_index(CRYPTO_EX_INDEX_EVP_PKEY, evp_pkey_ex_index);
+		evp_pkey_ex_index = 0;
+	}
+}
+#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
+
+
 #if OPENSSL_VERSION_NUMBER < 0x40000000L
 # if OPENSSL_VERSION_NUMBER >= 0x30000000L
 void pkcs11_set_ex_data_pkey(EVP_PKEY *pkey, PKCS11_OBJECT_private *key)
@@ -1061,7 +1176,7 @@ void alloc_pkey_ex_index(void)
 {
 	if (pkey_ex_index == 0) {
 		while (pkey_ex_index == 0) /* Workaround for OpenSSL RT3710 */
-			pkey_ex_index = EVP_PKEY_get_ex_new_index(0, "libp11 EVP_PKEY",
+			pkey_ex_index = EVP_PKEY_get_ex_new_index(0, "libp11 PKCS11_KEY",
 				NULL, NULL, NULL);
 		if (pkey_ex_index < 0)
 			pkey_ex_index = 0; /* Fallback to app_data */
@@ -1076,62 +1191,6 @@ void free_pkey_ex_index(void)
 	}
 }
 # endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
-
-static CK_MECHANISM_TYPE pkcs11_md2ckm(const EVP_MD *md)
-{
-	switch (EVP_MD_type(md)) {
-	case NID_sha1:
-		return CKM_SHA_1;
-	case NID_sha224:
-		return CKM_SHA224;
-	case NID_sha256:
-		return CKM_SHA256;
-	case NID_sha512:
-		return CKM_SHA512;
-	case NID_sha384:
-		return CKM_SHA384;
-#if OPENSSL_VERSION_NUMBER >= 0x10101000L && !defined(LIBRESSL_VERSION_NUMBER)
-	case NID_sha3_224:
-		return CKM_SHA3_224;
-	case NID_sha3_256:
-		return CKM_SHA3_256;
-	case NID_sha3_384:
-		return CKM_SHA3_384;
-	case NID_sha3_512:
-		return CKM_SHA3_512;
-#endif
-	default:
-		return 0;
-	}
-}
-
-static CK_RSA_PKCS_MGF_TYPE pkcs11_md2ckg(const EVP_MD *md)
-{
-	switch (EVP_MD_type(md)) {
-	case NID_sha1:
-		return CKG_MGF1_SHA1;
-	case NID_sha224:
-		return CKG_MGF1_SHA224;
-	case NID_sha256:
-		return CKG_MGF1_SHA256;
-	case NID_sha512:
-		return CKG_MGF1_SHA512;
-	case NID_sha384:
-		return CKG_MGF1_SHA384;
-#if OPENSSL_VERSION_NUMBER >= 0x10101000L && !defined(LIBRESSL_VERSION_NUMBER)
-	case NID_sha3_224:
-		return CKG_MGF1_SHA3_224;
-	case NID_sha3_256:
-		return CKG_MGF1_SHA3_256;
-	case NID_sha3_384:
-		return CKG_MGF1_SHA3_384;
-	case NID_sha3_512:
-		return CKG_MGF1_SHA3_512;
-#endif
-	default:
-		return 0;
-	}
-}
 
 static int pkcs11_params_pss(CK_RSA_PKCS_PSS_PARAMS *pss,
 		EVP_PKEY_CTX *ctx, PKCS11_CTX_private *pctx)

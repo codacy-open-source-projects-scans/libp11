@@ -53,14 +53,14 @@ int main(int argc, char **argv)
 	}
 
 	/* Load keys */
-	private_key = load_pkey(argv[1], NULL);
+	private_key = load_pkey(argv[1], "provider=pkcs11prov", NULL);
 	if (!private_key) {
 		fprintf(stderr, "Cannot load private key: %s\n", argv[1]);
 		display_openssl_errors();
 		goto cleanup;
 	}
 	printf("Private key found.\n");
-	public_key = load_pubkey(argv[2]);
+	public_key = load_pubkey(argv[2], "provider=pkcs11prov");
 	if (!public_key) {
 		fprintf(stderr, "Cannot load public key: %s\n", argv[2]);
 		display_openssl_errors();
@@ -86,6 +86,7 @@ int main(int argc, char **argv)
 		display_openssl_errors();
 		goto cleanup;
 	}
+	/* EME-OAEP as defined in PKCS #1 v2.0 with SHA-1, MGF1 and an empty encoding parameter (OAEP label) */
 	if (EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_OAEP_PADDING) <= 0) {
 		fprintf(stderr, "Could not set padding\n");
 		display_openssl_errors();
@@ -118,8 +119,7 @@ int main(int argc, char **argv)
 	}
 
 	/* Get the output length */
-	ret = EVP_PKEY_decrypt(pkey_ctx, NULL, &dec_len, enc, enc_len);
-	if (ret < 0) {
+	if (EVP_PKEY_decrypt(pkey_ctx, NULL, &dec_len, enc, enc_len) <= 0) {
 		display_openssl_errors();
 		goto cleanup;
 	}
@@ -127,14 +127,13 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Buffer too small to hold decrypted data\n");
 		goto cleanup;
 	}
-	ret = EVP_PKEY_decrypt(pkey_ctx, dec, &dec_len, enc, enc_len);
-	if (ret < 0) {
+	if (EVP_PKEY_decrypt(pkey_ctx, dec, &dec_len, enc, enc_len) <= 0) {
 		display_openssl_errors();
 		goto cleanup;
 	}
 
 	/* Compare output */
-	if (!memcmp(dec, data, data_len)) {
+	if (dec_len == data_len && memcmp(dec, data, data_len) == 0) {
 		printf("Successfully decrypted\n");
 		ret = EXIT_SUCCESS;
 	} else {

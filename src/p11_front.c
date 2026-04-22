@@ -32,9 +32,14 @@
 
 /* External interface to the libp11 features */
 
+PKCS11_CTX *PKCS11_CTX_new_ex(int flags)
+{
+	return pkcs11_CTX_new(flags);
+}
+
 PKCS11_CTX *PKCS11_CTX_new(void)
 {
-	return pkcs11_CTX_new();
+	return pkcs11_CTX_new(0);
 }
 
 void PKCS11_CTX_init_args(PKCS11_CTX *ctx, const char *init_args)
@@ -425,13 +430,13 @@ int PKCS11_keygen(PKCS11_TOKEN *token, PKCS11_KGEN_ATTRS *kg)
 	case EVP_PKEY_EC:
 		return pkcs11_ec_keygen(slot, kg->kgen.ec->curve,
 				kg->key_label, kg->key_id, kg->id_len, kg->key_params);
-# if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#endif /* OPENSSL_NO_EC */
+#if !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L
 	case EVP_PKEY_ED25519:
 	case EVP_PKEY_ED448:
 		return pkcs11_eddsa_keygen(slot, kg->kgen.eddsa->nid,
 				kg->key_label, kg->key_id, kg->id_len, kg->key_params);
-# endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
-#endif /* OPENSSL_NO_EC */
+#endif /* !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L */
 	default:
 		return -1;
 	}
@@ -444,10 +449,11 @@ int PKCS11_generate_key(PKCS11_TOKEN *token, int algorithm,
 	PKCS11_params key_params = { .extractable = 0, .sensitive = 1 };
 #ifndef OPENSSL_NO_EC
 	PKCS11_EC_KGEN ec_kgen;
-# if OPENSSL_VERSION_NUMBER >= 0x30000000L
-	PKCS11_EDDSA_KGEN eddsa_kgen;
-# endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
 #endif /* OPENSSL_NO_EC */
+#if !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+	PKCS11_EDDSA_KGEN eddsa_kgen;
+#endif /* !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L */
+
 	PKCS11_RSA_KGEN rsa_kgen;
 	PKCS11_KGEN_ATTRS kgen_attrs = { 0 };
 
@@ -465,7 +471,8 @@ int PKCS11_generate_key(PKCS11_TOKEN *token, int algorithm,
 			.key_params = &key_params
 		};
 		break;
-# if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#endif /* OPENSSL_NO_EC */
+#if !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L
 	case EVP_PKEY_ED25519:
 		eddsa_kgen.nid = NID_ED25519;
 		kgen_attrs = (PKCS11_KGEN_ATTRS){
@@ -491,8 +498,7 @@ int PKCS11_generate_key(PKCS11_TOKEN *token, int algorithm,
 			.key_params = &key_params
 		};
 		break;
-# endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
-#endif /* OPENSSL_NO_EC */
+#endif /* !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L */
 	default:
 		rsa_kgen.bits = param;
 		kgen_attrs = (PKCS11_KGEN_ATTRS){
@@ -541,6 +547,72 @@ int PKCS11_sign(int type, const unsigned char *m, unsigned int m_len,
 		return -1;
 	return pkcs11_sign(type, m, m_len, sigret, siglen, key);
 }
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+int PKCS11_evp_pkey_sign(EVP_PKEY *pk, int type, const char *mdname,
+	const int pad_mode, const int pss_saltlen, const char *mgf1_mdname,
+	unsigned char *oaep_label, const int oaep_labellen,
+	unsigned char *sig, size_t *siglen,
+	const unsigned char *tbs, size_t tbslen)
+{
+	PKCS11_OBJECT_private *key;
+	PKCS11_KEY *pkey = pkcs11_get_pkcs11_key(pk);
+
+	if (pkey == NULL)
+		return -1;
+
+	key = PRIVKEY(pkey);
+	if (check_object_fork(key) < 0)
+		return -1;
+
+	switch (type) {
+	case EVP_PKEY_RSA:
+		return pkcs11_evp_pkey_rsa_sign(key, pk, mdname,
+			pad_mode, pss_saltlen, mgf1_mdname,
+			oaep_label, oaep_labellen,
+			sig, siglen, tbs, tbslen);
+#ifndef OPENSSL_NO_EC
+	case EVP_PKEY_EC:
+		return pkcs11_evp_pkey_ec_sign(key, sig, siglen, tbs, tbslen);
+#endif /* OPENSSL_NO_EC */
+#if !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+	case EVP_PKEY_ED25519:
+	case EVP_PKEY_ED448:
+		return pkcs11_evp_pkey_eddsa_sign(key, sig, siglen, tbs, tbslen);
+#endif /* !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L */
+	default:
+		return -2; /* type not supported */
+	}
+}
+
+int PKCS11_evp_pkey_decrypt(EVP_PKEY *pk, int type, const char *mdname,
+	const int pad_mode, const char *mgf1_mdname,
+	unsigned char *oaep_label, const int oaep_labellen,
+	unsigned char *out, size_t *outlen,
+	size_t *outsize, const unsigned char *in, size_t inlen)
+{
+	PKCS11_OBJECT_private *key;
+	PKCS11_KEY *pkey = pkcs11_get_pkcs11_key(pk);
+
+	if (pkey == NULL)
+		return -1;
+
+	key = PRIVKEY(pkey);
+	if (check_object_fork(key) < 0)
+		return -1;
+
+	switch (type) {
+	case EVP_PKEY_RSA:
+	case EVP_PKEY_RSA_PSS:
+		return pkcs11_evp_pkey_rsa_decrypt(key, pk, mdname,
+			pad_mode, mgf1_mdname,
+			oaep_label, oaep_labellen,
+			out, outlen, outsize, in, inlen);
+	default:
+		return -2; /* type not supported */
+	}
+}
+#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
 
 int PKCS11_private_encrypt(int flen, const unsigned char *from, unsigned char *to,
 		PKCS11_KEY *pkey, int padding)

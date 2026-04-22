@@ -20,7 +20,7 @@
 #include "helpers_prov.h"
 #include "eddsa_common.h"
 
-#if !defined(OPENSSL_NO_EC) && (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+#if !defined(OPENSSL_NO_ECX) && (OPENSSL_VERSION_NUMBER >= 0x30000000L)
 
 static void error_queue(const char *name)
 {
@@ -54,6 +54,8 @@ int main(int argc, char *argv[])
 		.id_len = 2,
 		.key_params = &params,
 	};
+	const char *private_uri = "pkcs11:token=token1;object=libp11-keylabel;type=private;pin-value=1234";
+	const char *public_uri = "pkcs11:token=token1;object=libp11-keylabel;type=public";
 
 	if (argc < 4) {
 		printf("Too few arguments\n");
@@ -103,6 +105,13 @@ int main(int argc, char *argv[])
 	CHECK_ERR(rc < 0, "Failed to generate a key pair on the token", 8);
 	printf("Ed448 keys generated\n");
 
+	/* Free the list of slots allocated by PKCS11_enumerate_slots() */
+	PKCS11_release_all_slots(ctx, slots, nslots);
+	slots = NULL;
+	PKCS11_CTX_unload(ctx);
+	PKCS11_CTX_free(ctx);
+	ctx = NULL;
+
 	/* Load pkcs11prov and default providers */
 	if (!providers_load()) {
 		display_openssl_errors();
@@ -110,7 +119,7 @@ int main(int argc, char *argv[])
 	}
 
 	/* Load keys */
-	private_key = load_pkey("pkcs11:token=token1;object=libp11-keylabel;type=private", NULL);
+	private_key = load_pkey(private_uri, "provider=pkcs11prov", NULL);
 	if (!private_key) {
 		printf("Cannot load private key: %s\n", argv[3]);
 		display_openssl_errors();
@@ -118,7 +127,7 @@ int main(int argc, char *argv[])
 	}
 	printf("Private key found.\n");
 
-	public_key = load_pubkey("pkcs11:token=token1;object=libp11-keylabel;type=public");
+	public_key = load_pubkey(public_uri, "provider=pkcs11prov");
 	if (!public_key) {
 		printf("Cannot load public key: %s\n", argv[3]);
 		display_openssl_errors();
@@ -153,15 +162,15 @@ cleanup:
 	return ret;
 }
 
-#else /* !OPENSSL_NO_EC && OpenSSL 3.x */
+#else /* !OPENSSL_NO_ECX && OPENSSL_VERSION_NUMBER >= 0x30000000L */
 
 #include <stdio.h>
 
 int main() {
-	fprintf(stderr, "Skipped: requires OpenSSL >= 3.0 built with EC support\n");
+	fprintf(stderr, "Skipped: requires OpenSSL >= 3.0 built with ECX support\n");
 	return 77;
 }
 
-#endif /* !OPENSSL_NO_EC && OPENSSL_VERSION_NUMBER >= 0x30000000L  */
+#endif /* !OPENSSL_NO_ECX && OPENSSL_VERSION_NUMBER >= 0x30000000L */
 
 /* vim: set noexpandtab: */

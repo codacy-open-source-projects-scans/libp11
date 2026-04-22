@@ -31,7 +31,7 @@
 #include "libp11-int.h"
 #include <string.h>
 
-#if !defined(OPENSSL_NO_EC) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+#if !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L
 #include <openssl/ec.h>
 #include <openssl/bn.h>
 
@@ -349,14 +349,17 @@ static int strip_der_octet_string_alloc(const unsigned char *in, size_t inlen,
 	 * encoded as a DER OCTET STRING */
 	os = d2i_ASN1_OCTET_STRING(NULL, &p, (long)inlen);
 	if (os != NULL && p == in + inlen) {
-		buf = OPENSSL_malloc((size_t)os->length);
+		const unsigned char *data = ASN1_STRING_get0_data(os);
+		int len = ASN1_STRING_length(os);
+		
+		buf = OPENSSL_malloc((size_t)len);
 		if (buf == NULL) {
 			ASN1_OCTET_STRING_free(os);
 			return 0;
 		}
-		memcpy(buf, os->data, (size_t)os->length);
+		memcpy(buf, data, (size_t)len);
 		*out = buf;
-		*outlen = (size_t)os->length;
+		*outlen = (size_t)len;
 		ASN1_OCTET_STRING_free(os);
 		return 1;
 	}
@@ -591,23 +594,22 @@ static EVP_PKEY *pkcs11_get_evp_key_ed25519(PKCS11_OBJECT_private *key)
 	if (!pkey)
 		return NULL;
 
+#if OPENSSL_VERSION_NUMBER < 0x40000000L
 	if (key->object_class == CKO_PRIVATE_KEY) {
-#if OPENSSL_VERSION_NUMBER < 0x40000000L
-		/* global initialize ED25519 EVP_PKEY_METHOD */
-		if (!pkcs11_ed25519_method_new()) {
-			EVP_PKEY_free(pkey);
-			return NULL;
+		if ((key->slot->ctx->flags & PKCS11_FLAG_NO_METHODS) == 0) {
+			/* global initialize ED25519 EVP_PKEY_METHOD */
+			if (!pkcs11_ed25519_method_new()) {
+				EVP_PKEY_free(pkey);
+				return NULL;
+			}
+			/* creates a new EVP_PKEY object which requires its own key object reference */
+			key = pkcs11_object_ref(key);
+			alloc_pkey_ex_index();
+			pkcs11_set_ex_data_pkey(pkey, key);
+			atexit(pkcs11_ed25519_method_free);
 		}
-#endif /* OPENSSL_VERSION_NUMBER < 0x40000000L */
-
-		/* creates a new EVP_PKEY object which requires its own key object reference */
-		key = pkcs11_object_ref(key);
-
-#if OPENSSL_VERSION_NUMBER < 0x40000000L
-		alloc_pkey_ex_index();
-		pkcs11_set_ex_data_pkey(pkey, key);
-#endif /* OPENSSL_VERSION_NUMBER < 0x40000000L */
 	}
+#endif /* OPENSSL_VERSION_NUMBER < 0x40000000L */
 	return pkey;
 }
 
@@ -627,23 +629,22 @@ static EVP_PKEY *pkcs11_get_evp_key_ed448(PKCS11_OBJECT_private *key)
 	if (!pkey)
 		return NULL;
 
+#if OPENSSL_VERSION_NUMBER < 0x40000000L
 	if (key->object_class == CKO_PRIVATE_KEY) {
-#if OPENSSL_VERSION_NUMBER < 0x40000000L
-		/* global initialize ED448 EVP_PKEY_METHOD */
-		if (!pkcs11_ed448_method_new()) {
-			EVP_PKEY_free(pkey);
-			return NULL;
+		if ((key->slot->ctx->flags & PKCS11_FLAG_NO_METHODS) == 0) {
+			/* global initialize ED448 EVP_PKEY_METHOD */
+			if (!pkcs11_ed448_method_new()) {
+				EVP_PKEY_free(pkey);
+				return NULL;
+			}
+			/* create a new EVP_PKEY object which requires its own key object reference */
+			key = pkcs11_object_ref(key);
+			alloc_pkey_ex_index();
+			pkcs11_set_ex_data_pkey(pkey, key);
+			atexit(pkcs11_ed25519_method_free);
 		}
-#endif /* OPENSSL_VERSION_NUMBER < 0x40000000L */
-
-		/* create a new EVP_PKEY object which requires its own key object reference */
-		key = pkcs11_object_ref(key);
-
-#if OPENSSL_VERSION_NUMBER < 0x40000000L
-		alloc_pkey_ex_index();
-		pkcs11_set_ex_data_pkey(pkey, key);
-#endif /* OPENSSL_VERSION_NUMBER < 0x40000000L */
 	}
+#endif /* OPENSSL_VERSION_NUMBER < 0x40000000L */
 	return pkey;
 }
 
@@ -658,11 +659,16 @@ PKCS11_OBJECT_ops pkcs11_ed448_ops = {
 	pkcs11_get_evp_key_ed448,
 };
 
-#else /* !defined(OPENSSL_NO_EC) && OPENSSL_VERSION_NUMBER >= 0x30000000L */
+#else /* !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L */
 
-/* if not built with EC or OpenSSL does not support EdDSA
- * add these routines so engine_pkcs11 can be built now and not
- * require further changes */
+/*
+ * EdDSA (Ed25519/Ed448) support is not available:
+ * - either OpenSSL was built without ECX (no-ecx), or
+ * - OpenSSL version is older than 3.0.
+ *
+ * Provide stubs so engine_pkcs11 can still be built without
+ * requiring conditional changes elsewhere.
+ */
 #warning "EdDSA support not built with libp11"
 
-#endif /* !defined(OPENSSL_NO_EC) && OPENSSL_VERSION_NUMBER >= 0x30000000L */
+#endif /* !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L */
