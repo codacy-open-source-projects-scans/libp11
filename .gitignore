@@ -66,6 +66,12 @@ examples/eckeygen
 examples/rsakeygen
 examples/ed25519keygen
 examples/ed448keygen
+examples/x25519keygen
+examples/x448keygen
+examples/falcon512keygen
+examples/mldsa87keygen
+examples/mlkem768keygen
+examples/slhdsa256skeygen
 examples/storecert
 
 test-driver
@@ -76,6 +82,7 @@ tests/evp-sign
 tests/fork-change-slot
 tests/rsa-oaep
 tests/rsa-pss-sign
+tests/rsa-software-key
 tests/check-privkey
 tests/dup-key
 tests/check-privkey-prov
@@ -85,12 +92,19 @@ tests/fork-change-slot-prov
 tests/rsa-oaep-prov
 tests/rsa-pss-sign-prov
 tests/rsa-keygen
+tests/ec-duplicate-key
 tests/ec-keygen
+tests/ec-derive
+tests/ec-derive-prov
 tests/ed25519-keygen
 tests/ed448-keygen
 tests/ed25519-keygen-prov
 tests/ed448-keygen-prov
+tests/mldsa87-keygen-prov
+tests/mlkem768-keygen-prov
 tests/check-all-prov
+tests/session-pool-stress
+tests/session-pool-test
 
 tests/*.log
 tests/*.trs

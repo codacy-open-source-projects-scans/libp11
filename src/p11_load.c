@@ -23,6 +23,11 @@
 /* Global number of active PKCS11_CTX objects */
 static int pkcs11_global_data_refs = 0;
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+int NID_FALCON_512 = NID_undef;
+int NID_FALCON_1024 = NID_undef;
+#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
+
 /*
  * Free global ex_data indexes and custom key methods
  */
@@ -34,14 +39,7 @@ static void libp11_global_free(void)
 
 #ifndef OPENSSL_NO_RSA
 	pkcs11_rsa_method_free();
-# if OPENSSL_VERSION_NUMBER >= 0x30000000L && OPENSSL_VERSION_NUMBER < 0x40000000L
-	pkcs11_rsa_key_method_free();
-# endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L && OPENSSL_VERSION_NUMBER < 0x40000000L */
 #endif /* OPENSSL_NO_RSA */
-
-#if !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L && OPENSSL_VERSION_NUMBER < 0x40000000L
-	pkcs11_ed_key_method_free();
-#endif /* !defined(OPENSSL_NO_ECX) && OPENSSL_VERSION_NUMBER >= 0x30000000L && OPENSSL_VERSION_NUMBER < 0x40000000L */
 
 #if OPENSSL_VERSION_NUMBER >= 0x10100002L
 #ifndef OPENSSL_NO_EC
@@ -58,6 +56,9 @@ static void libp11_global_free(void)
 	pkcs11_ecdh_method_free();
 #endif /* OPENSSL_NO_ECDH */
 #endif /* OPENSSL_VERSION_NUMBER >= 0x10100002L */
+
+	ERR_unload_CKR_strings();
+	ERR_unload_P11_strings();
 }
 
 /*
@@ -97,7 +98,7 @@ fail:
  */
 void pkcs11_CTX_init_args(PKCS11_CTX *ctx, const char *init_args)
 {
-	PKCS11_CTX_private *cpriv = PRIVCTX(ctx);
+	PKCS11_CTX_private *cpriv = ctx->_private;
 	/* Free previously duplicated string */
 	if (cpriv->init_args) {
 		OPENSSL_free(cpriv->init_args);
@@ -127,16 +128,51 @@ static int pkcs11_initialize(PKCS11_CTX_private *cpriv)
 	return 0;
 }
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+static int register_falcon_oid(const char *oid, const char *sn, const char *ln)
+{
+	int nid;
+
+	nid = OBJ_txt2nid(oid);
+	if (nid != NID_undef)
+		return nid;
+
+	return OBJ_create(oid, sn, ln);
+}
+
+static int register_falcon_oids(void)
+{
+	static int initialized = 0;
+
+	if (initialized)
+		return 1;
+
+	/* OQS/oqs-provider compatibility OIDs for Falcon.
+	 * These are provisional/non-standard identifiers under 1.3.9999 and should
+	 * be revisited once FN-DSA/Falcon receives stable standardized OIDs. */
+	NID_FALCON_512 = register_falcon_oid(
+		"1.3.9999.3.11", "FALCON-512", "Falcon-512");
+	NID_FALCON_1024 = register_falcon_oid(
+		"1.3.9999.3.14", "FALCON-1024", "Falcon-1024");
+
+	if (NID_FALCON_512 == NID_undef || NID_FALCON_1024 == NID_undef)
+		return 0;
+
+	initialized = 1;
+	return 1;
+}
+#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
+
 /*
  * Load the shared library, and initialize it.
  */
 int pkcs11_CTX_load(PKCS11_CTX *ctx, const char *name)
 {
-	PKCS11_CTX_private *cpriv = PRIVCTX(ctx);
+	PKCS11_CTX_private *cpriv = ctx->_private;
 	CK_INFO ck_info;
 	int rv;
 
-	cpriv->handle = C_LoadModule(name, &cpriv->method);
+	cpriv->handle = C_LoadModule(name, &cpriv->method, &cpriv->method_3_2);
 	if (!cpriv->handle) {
 		P11err(P11_F_PKCS11_CTX_LOAD, P11_R_LOAD_MODULE_ERROR);
 		return -1;
@@ -159,7 +195,9 @@ int pkcs11_CTX_load(PKCS11_CTX *ctx, const char *name)
 	ctx->description = PKCS11_DUP(ck_info.libraryDescription);
 	cpriv->cryptoki_version.major = ck_info.cryptokiVersion.major;
 	cpriv->cryptoki_version.minor = ck_info.cryptokiVersion.minor;
-
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	register_falcon_oids();
+#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
 	return 0;
 }
 
@@ -179,7 +217,7 @@ int pkcs11_CTX_reload(PKCS11_CTX_private *cpriv)
  */
 void pkcs11_CTX_unload(PKCS11_CTX *ctx)
 {
-	PKCS11_CTX_private *cpriv = PRIVCTX(ctx);
+	PKCS11_CTX_private *cpriv = ctx->_private;
 
 	/* Tell the PKCS11 library to shut down */
 	if (cpriv->method) {
@@ -200,7 +238,7 @@ void pkcs11_CTX_unload(PKCS11_CTX *ctx)
  */
 void pkcs11_CTX_free(PKCS11_CTX *ctx)
 {
-	PKCS11_CTX_private *cpriv = PRIVCTX(ctx);
+	PKCS11_CTX_private *cpriv = ctx->_private;
 
 	if (cpriv->init_args) {
 		OPENSSL_free(cpriv->init_args);

@@ -29,10 +29,6 @@
 static int rsa_ex_index = 0;
 static RSA_METHOD *pkcs11_rsa_method = NULL;
 
-#if OPENSSL_VERSION_NUMBER >= 0x30000000L && OPENSSL_VERSION_NUMBER < 0x40000000L
-static EVP_PKEY_METHOD *pkey_method_rsa  = NULL;
-#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L && OPENSSL_VERSION_NUMBER < 0x40000000L */
-
 static RSA *pkcs11_get1_rsa(PKCS11_OBJECT_private *key)
 {
 	EVP_PKEY *evp_key = pkcs11_get_key(key, key->object_class);
@@ -63,137 +59,66 @@ int pkcs11_sign(int type, const unsigned char *m, unsigned int m_len,
 	return ret;
 }
 
-/* Setup PKCS#11 mechanisms for encryption/decryption */
-static int pkcs11_mechanism(CK_MECHANISM *mechanism, const int padding)
-{
-	memset(mechanism, 0, sizeof(CK_MECHANISM));
-	switch (padding) {
-	case RSA_PKCS1_PADDING:
-		mechanism->mechanism = CKM_RSA_PKCS;
-		break;
-	case RSA_PKCS1_OAEP_PADDING:
-		mechanism->mechanism = CKM_RSA_PKCS_OAEP;
-		break;
-	case RSA_NO_PADDING:
-		mechanism->mechanism = CKM_RSA_X_509;
-		break;
-	case RSA_X931_PADDING:
-		mechanism->mechanism = CKM_RSA_X9_31;
-		break;
-	default:
-		P11err(P11_F_PKCS11_MECHANISM, P11_R_UNSUPPORTED_PADDING_TYPE);
-		return -1;
-	}
-	return 0;
-}
-
-static void
-pkcs11_oaep_param(CK_MECHANISM *mechanism, CK_RSA_PKCS_OAEP_PARAMS *oaep_params)
-{
-	/* Openssl API for RSA_private_decrypt() allows to use
-	 * RSA_PKCS1_OAEP_PADDING nly with SHA_1 hash and and MGF1_SHA1 mask
-	 * gen function.  It is not possible to use RFC8017 "Label" or
-	 * PKCS#11 "source data" respectively.
-	 * https://www.openssl.org/docs/man3.0/man3/RSA_private_decrypt.html */
-
-	mechanism->pParameter = oaep_params;
-	mechanism->ulParameterLen = sizeof(CK_RSA_PKCS_OAEP_PARAMS);
-	oaep_params->mgf = CKG_MGF1_SHA1;
-	oaep_params->hashAlg = CKM_SHA_1;
-	oaep_params->source = 0;
-	oaep_params->pSourceData = NULL;
-	oaep_params->ulSourceDataLen = 0;
-}
-/* RSA private key encryption (also invoked by OpenSSL for signing) */
-/* OpenSSL assumes that the output buffer is always big enough */
+/*
+ * RSA private key encryption (also invoked by OpenSSL for signing)
+ * OpenSSL assumes that the output buffer is always big enough
+ */
 int pkcs11_private_encrypt(int flen,
 		const unsigned char *from, unsigned char *to,
 		PKCS11_OBJECT_private *key, int padding)
 {
-	PKCS11_SLOT_private *slot = key->slot;
-	PKCS11_CTX_private *ctx = slot->ctx;
-	CK_MECHANISM mechanism;
-	CK_ULONG size;
-	CK_SESSION_HANDLE session;
-	int rv;
-	CK_RSA_PKCS_OAEP_PARAMS oaep_params;
+	PKCS11_SLOT_private *slot;
+	size_t siglen;
 
-	size = pkcs11_get_key_size(key);
-
-	if (pkcs11_mechanism(&mechanism, padding) < 0)
+	if (!key)
 		return -1;
 
-	if (mechanism.mechanism == CKM_RSA_PKCS_OAEP)
-		pkcs11_oaep_param(&mechanism, &oaep_params);
-
-	if (pkcs11_get_session(slot, 0, &session))
+	slot = key->slot;
+	if (!slot)
 		return -1;
 
-	/* Try signing first, as applications are more likely to use it */
-	rv = CRYPTOKI_call(ctx,
-		C_SignInit(session, &mechanism, key->object));
-	if (!rv && key->always_authenticate == CK_TRUE)
-		rv = pkcs11_authenticate(key, session);
-	if (!rv)
-		rv = CRYPTOKI_call(ctx,
-			C_Sign(session, (CK_BYTE *)from, flen, to, &size));
-	if (rv == CKR_KEY_FUNCTION_NOT_PERMITTED) {
-		/* OpenSSL may use it for encryption rather than signing */
-		rv = CRYPTOKI_call(ctx,
-			C_EncryptInit(session, &mechanism, key->object));
-		if (!rv && key->always_authenticate == CK_TRUE)
-			rv = pkcs11_authenticate(key, session);
-		if (!rv)
-			rv = CRYPTOKI_call(ctx,
-				C_Encrypt(session, (CK_BYTE *)from, flen, to, &size));
-	}
-	pkcs11_put_session(slot, session);
-
-	if (rv) {
-		CKRerr(CKR_F_PKCS11_PRIVATE_ENCRYPT, rv);
+	siglen = pkcs11_get_key_size(key);
+	if (pkcs11_evp_pkey_rsa_sign(key,
+		NULL, /* EVP_PKEY unused: RSA-PSS unsupported in ENGINE path */
+		NULL, /* digest metadata unavailable, input is already encoded/padded if needed */
+		padding,
+		0, NULL, /* unsupported PSS parameters */
+		to, &siglen, from, flen) <= 0)
 		return -1;
-	}
 
-	return size;
+	return (int)siglen;
 }
 
 /* RSA private key decryption */
-int pkcs11_private_decrypt(int flen, const unsigned char *from, unsigned char *to,
+int pkcs11_private_decrypt(int flen,
+		const unsigned char *from, unsigned char *to,
 		PKCS11_OBJECT_private *key, int padding)
 {
-	PKCS11_SLOT_private *slot = key->slot;
-	PKCS11_CTX_private *ctx = slot->ctx;
-	CK_SESSION_HANDLE session;
-	CK_MECHANISM mechanism;
-	CK_ULONG size = flen;
-	CK_RV rv;
-	CK_RSA_PKCS_OAEP_PARAMS oaep_params;
+	PKCS11_SLOT_private *slot;
+	size_t outlen;
 
-	if (pkcs11_mechanism(&mechanism, padding) < 0)
+	if (padding != RSA_PKCS1_OAEP_PADDING)
+		return -1; /* unsupported */
+
+	if (!key)
 		return -1;
 
-	if (mechanism.mechanism == CKM_RSA_PKCS_OAEP)
-		pkcs11_oaep_param(&mechanism, &oaep_params);
-
-	if (pkcs11_get_session(slot, 0, &session))
+	slot = key->slot;
+	if (!slot)
 		return -1;
 
-	rv = CRYPTOKI_call(ctx,
-		C_DecryptInit(session, &mechanism, key->object));
-	if (!rv && key->always_authenticate == CK_TRUE)
-		rv = pkcs11_authenticate(key, session);
-	if (!rv)
-		rv = CRYPTOKI_call(ctx,
-			C_Decrypt(session, (CK_BYTE *)from, size,
-				(CK_BYTE_PTR)to, &size));
-	pkcs11_put_session(slot, session);
-
-	if (rv) {
-		CKRerr(CKR_F_PKCS11_PRIVATE_DECRYPT, rv);
+	/* Openssl API for RSA_private_decrypt() allows to use
+	 * RSA_PKCS1_OAEP_PADDING only with SHA_1 hash and and MGF1_SHA1 mask
+	 * gen function.  It is not possible to use RFC8017 "Label" or
+	 * PKCS#11 "source data" respectively.
+	 * https://www.openssl.org/docs/man3.0/man3/RSA_private_decrypt.html */
+	outlen = flen;
+	if (pkcs11_evp_pkey_rsa_decrypt(key, "SHA1", padding, "SHA1",
+		NULL, 0, /* unsupported oaep_label */
+		to, &outlen, from, flen) <= 0)
 		return -1;
-	}
 
-	return size;
+	return (int)outlen;
 }
 
 /* TODO: remove this function in libp11 0.5.0 */
@@ -227,7 +152,7 @@ static RSA *pkcs11_get_rsa(PKCS11_OBJECT_private *key)
 	RSA *rsa;
 	BIGNUM *rsa_n = NULL, *rsa_e = NULL;
 
-	if (pkcs11_get_session(slot, 0, &session))
+	if (pkcs11_session_pool_acquire(slot, 0, &session))
 		return NULL;
 
 	/* Retrieve the modulus */
@@ -247,6 +172,7 @@ static RSA *pkcs11_get_rsa(PKCS11_OBJECT_private *key)
 	pkcs11_addattr_var(&tmpl, CKA_CLASS, class_public_key);
 	pkcs11_addattr_bn(&tmpl, CKA_MODULUS, rsa_n);
 	pubkey = pkcs11_object_from_template(slot, session, &tmpl);
+	pkcs11_zap_attrs(&tmpl);
 	if (pubkey && !pkcs11_getattr_bn(ctx, session, pubkey->object,
 			CKA_PUBLIC_EXPONENT, &rsa_e)) {
 		pkcs11_object_free(pubkey);
@@ -260,18 +186,20 @@ static RSA *pkcs11_get_rsa(PKCS11_OBJECT_private *key)
 		goto success;
 
 failure:
-	pkcs11_put_session(slot, session);
-	if (rsa_n)
-		BN_clear_free(rsa_n);
-	if (rsa_e)
-		BN_clear_free(rsa_e);
+	pkcs11_session_pool_release(slot, session);
+	/* BN_clear_free() is NULL-safe */
+	BN_clear_free(rsa_n);
+	BN_clear_free(rsa_e);
 	return NULL;
 
 success:
-	pkcs11_put_session(slot, session);
+	pkcs11_session_pool_release(slot, session);
 	rsa = RSA_new();
-	if (!rsa)
-		goto failure;
+	if (!rsa) {
+		BN_clear_free(rsa_n);
+		BN_clear_free(rsa_e);
+		return NULL;
+	}
 #if OPENSSL_VERSION_NUMBER >= 0x10100005L || ( defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER >= 0x3050000fL )
 	RSA_set0_key(rsa, rsa_n, rsa_e, NULL);
 #else
@@ -291,39 +219,6 @@ void pkcs11_set_ex_data_rsa(RSA *rsa, PKCS11_OBJECT_private *key)
 	RSA_set_ex_data(rsa, rsa_ex_index, key);
 }
 
-#if OPENSSL_VERSION_NUMBER >= 0x30000000L && OPENSSL_VERSION_NUMBER < 0x40000000L
-
-/* Global initialize RSA EVP_PKEY_METHOD */
-static int pkcs11_pkey_method_rsa_new(void)
-{
-	if (pkey_method_rsa)
-		return 1; /* EVP_PKEY_RSA method already initialized */
-
-	pkey_method_rsa = pkcs11_pkey_method_rsa();
-	if (!pkey_method_rsa)
-		return 0;
-
-	/* Register the method globally */
-	if (!EVP_PKEY_meth_add0(pkey_method_rsa)) {
-		EVP_PKEY_meth_free(pkey_method_rsa);
-		pkey_method_rsa = NULL;
-		return 0;
-	}
-	return 1;
-}
-
-void pkcs11_rsa_key_method_free(void)
-{
-	if (pkey_method_rsa) {
-		free_pkey_ex_index();
-		EVP_PKEY_meth_remove(pkey_method_rsa);
-		EVP_PKEY_meth_free(pkey_method_rsa);
-		pkey_method_rsa = NULL;
-	}
-}
-
-#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L && OPENSSL_VERSION_NUMBER < 0x40000000L */
-
 /*
  * Build an EVP_PKEY object
  */
@@ -341,23 +236,8 @@ static EVP_PKEY *pkcs11_get_evp_key_rsa(PKCS11_OBJECT_private *key)
 		return NULL;
 	}
 	if (key->object_class == CKO_PRIVATE_KEY) {
-#if OPENSSL_VERSION_NUMBER >= 0x30000000L
-# if OPENSSL_VERSION_NUMBER < 0x40000000L
-		if ((key->slot->ctx->flags & PKCS11_FLAG_NO_METHODS) == 0) {
-			/* global initialize RSA EVP_PKEY_METHOD */
-			if (!pkcs11_pkey_method_rsa_new()) {
-				EVP_PKEY_free(pk);
-				return NULL;
-			}
-			alloc_pkey_ex_index();
-			pkcs11_set_ex_data_pkey(pk, key);
-			atexit(pkcs11_rsa_key_method_free);
-		}
-# endif /* OPENSSL_VERSION_NUMBER < 0x40000000L */
-		/* creates a new EVP_PKEY object which requires its own key object reference */
+		/* The RSA object owns the reference stored in its ex_data. */
 		key = pkcs11_object_ref(key);
-#endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
-
 		RSA_set_method(rsa, PKCS11_get_rsa_method());
 #if OPENSSL_VERSION_NUMBER >= 0x10100005L || ( defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER >= 0x3050000fL )
 		RSA_set_flags(rsa, RSA_FLAG_EXT_PKEY);
@@ -374,7 +254,11 @@ static EVP_PKEY *pkcs11_get_evp_key_rsa(PKCS11_OBJECT_private *key)
 #endif
 	pkcs11_set_ex_data_rsa(rsa, key);
 
-	EVP_PKEY_set1_RSA(pk, rsa); /* Also increments the rsa ref count */
+	if (!EVP_PKEY_set1_RSA(pk, rsa)) {
+		RSA_free(rsa);
+		EVP_PKEY_free(pk);
+		return NULL;
+	}
 	RSA_free(rsa); /* Drops our reference to it */
 	return pk;
 }

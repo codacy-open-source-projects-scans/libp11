@@ -40,7 +40,7 @@
 #include <openssl/params.h>
 #include <openssl/store.h>
 
-#define FIPS_PROPQ "provider=pkcs11prov,fips=yes"
+#define PKCS11_PROPQ "provider=pkcs11prov"
 
 typedef struct {
 	PROVIDER_CTX *prov_ctx;
@@ -73,6 +73,9 @@ PROVIDER_FN(keymgmt_export_types);
 PROVIDER_FN(keymgmt_get_params);
 PROVIDER_FN(keymgmt_gettable_params);
 PROVIDER_FN(keymgmt_dup);
+PROVIDER_FN(keymgmt_gen_set_params);
+PROVIDER_FN(keymgmt_gen);
+PROVIDER_FN(keymgmt_gen_cleanup);
 
 PROVIDER_FN(signature_newctx);
 PROVIDER_FN(signature_freectx);
@@ -81,6 +84,8 @@ PROVIDER_FN(signature_sign_init);
 PROVIDER_FN(signature_sign);
 PROVIDER_FN(signature_verify_init);
 PROVIDER_FN(signature_verify);
+PROVIDER_FN(signature_verify_recover_init);
+PROVIDER_FN(signature_verify_recover);
 PROVIDER_FN(signature_digest_sign_init);
 PROVIDER_FN(signature_digest_sign_update);
 PROVIDER_FN(signature_digest_sign_final);
@@ -106,6 +111,29 @@ PROVIDER_FN(asym_cipher_gettable_ctx_params);
 PROVIDER_FN(asym_cipher_set_ctx_params);
 PROVIDER_FN(asym_cipher_settable_ctx_params);
 
+PROVIDER_FN(keyexch_newctx);
+PROVIDER_FN(keyexch_freectx);
+PROVIDER_FN(keyexch_dupctx);
+PROVIDER_FN(keyexch_init);
+PROVIDER_FN(keyexch_set_peer);
+PROVIDER_FN(keyexch_derive);
+PROVIDER_FN(keyexch_set_ctx_params);
+PROVIDER_FN(keyexch_settable_ctx_params);
+PROVIDER_FN(keyexch_get_ctx_params);
+PROVIDER_FN(keyexch_gettable_ctx_params);
+
+PROVIDER_FN(kem_newctx);
+PROVIDER_FN(kem_freectx);
+PROVIDER_FN(kem_dupctx);
+PROVIDER_FN(kem_encapsulate_init);
+PROVIDER_FN(kem_encapsulate);
+PROVIDER_FN(kem_decapsulate_init);
+PROVIDER_FN(kem_decapsulate);
+PROVIDER_FN(kem_get_ctx_params);
+PROVIDER_FN(kem_gettable_ctx_params);
+PROVIDER_FN(kem_set_ctx_params);
+PROVIDER_FN(kem_settable_ctx_params);
+
 PROVIDER_FN(store_open);
 PROVIDER_FN(store_set_ctx_params);
 PROVIDER_FN(store_settable_ctx_params);
@@ -127,23 +155,6 @@ static const OSSL_DISPATCH provider_functions[] = {
 	OSSL_DISPATCH_END
 };
 
-static const OSSL_DISPATCH keymgmt_functions[] = {
-	{OSSL_FUNC_KEYMGMT_NEW, (void (*)(void))keymgmt_new},
-	{OSSL_FUNC_KEYMGMT_LOAD, (void (*)(void))keymgmt_load},
-	{OSSL_FUNC_KEYMGMT_FREE, (void (*)(void))keymgmt_free},
-	{OSSL_FUNC_KEYMGMT_HAS, (void (*)(void))keymgmt_has},
-	{OSSL_FUNC_KEYMGMT_MATCH, (void (*)(void))keymgmt_match},
-	{OSSL_FUNC_KEYMGMT_QUERY_OPERATION_NAME, (void (*)(void))keymgmt_query_operation_name},
-	{OSSL_FUNC_KEYMGMT_IMPORT, (void (*)(void))keymgmt_import},
-	{OSSL_FUNC_KEYMGMT_IMPORT_TYPES, (void (*)(void))keymgmt_import_types},
-	{OSSL_FUNC_KEYMGMT_EXPORT, (void (*)(void))keymgmt_export},
-	{OSSL_FUNC_KEYMGMT_EXPORT_TYPES, (void (*)(void))keymgmt_export_types},
-	{OSSL_FUNC_KEYMGMT_GET_PARAMS, (void (*)(void))keymgmt_get_params},
-	{OSSL_FUNC_KEYMGMT_GETTABLE_PARAMS, (void (*)(void))keymgmt_gettable_params},
-	{OSSL_FUNC_KEYMGMT_DUP, (void (*)(void))keymgmt_dup},
-	OSSL_DISPATCH_END
-};
-
 static const OSSL_DISPATCH signature_functions[] = {
 	{OSSL_FUNC_SIGNATURE_NEWCTX, (void (*)(void))signature_newctx},
 	{OSSL_FUNC_SIGNATURE_FREECTX, (void (*)(void))signature_freectx},
@@ -152,6 +163,8 @@ static const OSSL_DISPATCH signature_functions[] = {
 	{OSSL_FUNC_SIGNATURE_SIGN, (void (*)(void))signature_sign},
 	{OSSL_FUNC_SIGNATURE_VERIFY_INIT, (void (*)(void))signature_verify_init},
 	{OSSL_FUNC_SIGNATURE_VERIFY, (void (*)(void))signature_verify},
+	{OSSL_FUNC_SIGNATURE_VERIFY_RECOVER_INIT, (void (*)(void))signature_verify_recover_init},
+	{OSSL_FUNC_SIGNATURE_VERIFY_RECOVER, (void (*)(void))signature_verify_recover},
 	{OSSL_FUNC_SIGNATURE_DIGEST_SIGN_INIT, (void (*)(void))signature_digest_sign_init},
 	{OSSL_FUNC_SIGNATURE_DIGEST_SIGN_UPDATE, (void (*)(void))signature_digest_sign_update},
 	{OSSL_FUNC_SIGNATURE_DIGEST_SIGN_FINAL, (void (*)(void))signature_digest_sign_final},
@@ -182,6 +195,35 @@ static const OSSL_DISPATCH asym_cipher_functions[] = {
 	OSSL_DISPATCH_END
 };
 
+static const OSSL_DISPATCH keyexch_functions[] = {
+	{OSSL_FUNC_KEYEXCH_NEWCTX, (void (*)(void))keyexch_newctx},
+	{OSSL_FUNC_KEYEXCH_FREECTX, (void (*)(void))keyexch_freectx},
+	{OSSL_FUNC_KEYEXCH_DUPCTX, (void (*)(void))keyexch_dupctx},
+	{OSSL_FUNC_KEYEXCH_INIT, (void (*)(void))keyexch_init},
+	{OSSL_FUNC_KEYEXCH_SET_PEER, (void (*)(void))keyexch_set_peer},
+	{OSSL_FUNC_KEYEXCH_DERIVE, (void (*)(void))keyexch_derive},
+	{OSSL_FUNC_KEYEXCH_GET_CTX_PARAMS, (void (*)(void))keyexch_get_ctx_params},
+	{OSSL_FUNC_KEYEXCH_GETTABLE_CTX_PARAMS, (void (*)(void))keyexch_gettable_ctx_params},
+	{OSSL_FUNC_KEYEXCH_SET_CTX_PARAMS, (void (*)(void))keyexch_set_ctx_params},
+	{OSSL_FUNC_KEYEXCH_SETTABLE_CTX_PARAMS, (void (*)(void))keyexch_settable_ctx_params},
+	OSSL_DISPATCH_END
+};
+
+static const OSSL_DISPATCH asym_kem_functions[] = {
+	{OSSL_FUNC_KEM_NEWCTX, (void (*)(void))kem_newctx},
+	{OSSL_FUNC_KEM_FREECTX, (void (*)(void))kem_freectx},
+	{OSSL_FUNC_KEM_DUPCTX, (void (*)(void))kem_dupctx},
+	{OSSL_FUNC_KEM_ENCAPSULATE_INIT, (void (*)(void))kem_encapsulate_init},
+	{OSSL_FUNC_KEM_ENCAPSULATE, (void (*)(void))kem_encapsulate},
+	{OSSL_FUNC_KEM_DECAPSULATE_INIT, (void (*)(void))kem_decapsulate_init},
+	{OSSL_FUNC_KEM_DECAPSULATE, (void (*)(void))kem_decapsulate},
+	{OSSL_FUNC_KEM_GET_CTX_PARAMS, (void (*)(void))kem_get_ctx_params},
+	{OSSL_FUNC_KEM_GETTABLE_CTX_PARAMS, (void (*)(void))kem_gettable_ctx_params},
+	{OSSL_FUNC_KEM_SET_CTX_PARAMS, (void (*)(void))kem_set_ctx_params},
+	{OSSL_FUNC_KEM_SETTABLE_CTX_PARAMS, (void (*)(void))kem_settable_ctx_params},
+	OSSL_DISPATCH_END
+};
+
 static const OSSL_DISPATCH store_functions[] = {
 	{OSSL_FUNC_STORE_OPEN, (void (*)(void))store_open},
 	{OSSL_FUNC_STORE_SET_CTX_PARAMS, (void (*)(void))store_set_ctx_params},
@@ -192,27 +234,225 @@ static const OSSL_DISPATCH store_functions[] = {
 	OSSL_DISPATCH_END
 };
 
-/* Keymgmt algorithms: must be real key types (e.g. RSA, EC), not provider names */
+#define KEYMGMT_COMMON_DISPATCH \
+	{OSSL_FUNC_KEYMGMT_NEW, (void (*)(void))keymgmt_new}, \
+	{OSSL_FUNC_KEYMGMT_LOAD, (void (*)(void))keymgmt_load}, \
+	{OSSL_FUNC_KEYMGMT_FREE, (void (*)(void))keymgmt_free}, \
+	{OSSL_FUNC_KEYMGMT_HAS, (void (*)(void))keymgmt_has}, \
+	{OSSL_FUNC_KEYMGMT_MATCH, (void (*)(void))keymgmt_match}, \
+	{OSSL_FUNC_KEYMGMT_QUERY_OPERATION_NAME, \
+		(void (*)(void))keymgmt_query_operation_name}, \
+	{OSSL_FUNC_KEYMGMT_IMPORT, (void (*)(void))keymgmt_import}, \
+	{OSSL_FUNC_KEYMGMT_IMPORT_TYPES, \
+		(void (*)(void))keymgmt_import_types}, \
+	{OSSL_FUNC_KEYMGMT_EXPORT, (void (*)(void))keymgmt_export}, \
+	{OSSL_FUNC_KEYMGMT_EXPORT_TYPES, \
+		(void (*)(void))keymgmt_export_types}, \
+	{OSSL_FUNC_KEYMGMT_GET_PARAMS, \
+		(void (*)(void))keymgmt_get_params}, \
+	{OSSL_FUNC_KEYMGMT_GETTABLE_PARAMS, \
+		(void (*)(void))keymgmt_gettable_params}, \
+	{OSSL_FUNC_KEYMGMT_DUP, (void (*)(void))keymgmt_dup}
+
+#define KEYMGMT_GEN_DISPATCH(gen_init, gen_settable) \
+	{OSSL_FUNC_KEYMGMT_GEN_INIT, (void (*)(void))(gen_init)}, \
+	{OSSL_FUNC_KEYMGMT_GEN_SET_PARAMS, \
+		(void (*)(void))keymgmt_gen_set_params}, \
+	{OSSL_FUNC_KEYMGMT_GEN_SETTABLE_PARAMS, \
+		(void (*)(void))(gen_settable)}, \
+	{OSSL_FUNC_KEYMGMT_GEN, (void (*)(void))keymgmt_gen}, \
+	{OSSL_FUNC_KEYMGMT_GEN_CLEANUP, \
+		(void (*)(void))keymgmt_gen_cleanup}
+
+static OSSL_FUNC_keymgmt_gen_settable_params_fn rsa_keymgmt_gen_settable_params;
+
+#ifndef OPENSSL_NO_EC
+static OSSL_FUNC_keymgmt_gen_settable_params_fn ec_keymgmt_gen_settable_params;
+#endif /* OPENSSL_NO_EC */
+
+static OSSL_FUNC_keymgmt_gen_settable_params_fn common_keymgmt_gen_settable_params;
+
+static void *keymgmt_gen_init_common(void *provctx, int type,
+	int selection, const OSSL_PARAM params[]);
+
+#define DEFINE_KEYMGMT_FUNCTIONS(name, type, gen_settable) \
+	static void *name##_keymgmt_gen_init(void *provctx, int selection, \
+		const OSSL_PARAM params[]) \
+	{ \
+		return keymgmt_gen_init_common(provctx, type, selection, params); \
+	} \
+	static const OSSL_DISPATCH name##_keymgmt_functions[] = { \
+		KEYMGMT_COMMON_DISPATCH, \
+		KEYMGMT_GEN_DISPATCH(name##_keymgmt_gen_init, gen_settable), \
+		OSSL_DISPATCH_END \
+	};
+
+DEFINE_KEYMGMT_FUNCTIONS(rsa, EVP_PKEY_RSA, rsa_keymgmt_gen_settable_params)
+
+#ifndef OPENSSL_NO_EC
+DEFINE_KEYMGMT_FUNCTIONS(ec, EVP_PKEY_EC, ec_keymgmt_gen_settable_params)
+#endif /* OPENSSL_NO_EC */
+
+#ifndef OPENSSL_NO_ECX
+DEFINE_KEYMGMT_FUNCTIONS(ed25519, EVP_PKEY_ED25519,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(ed448, EVP_PKEY_ED448,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(x25519, EVP_PKEY_X25519,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(x448, EVP_PKEY_X448,
+	common_keymgmt_gen_settable_params)
+#endif /* OPENSSL_NO_ECX */
+
+#if OPENSSL_VERSION_NUMBER >= 0x30500000L
+#ifndef OPENSSL_NO_ML_DSA
+DEFINE_KEYMGMT_FUNCTIONS(mldsa44, EVP_PKEY_ML_DSA_44,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(mldsa65, EVP_PKEY_ML_DSA_65,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(mldsa87, EVP_PKEY_ML_DSA_87,
+	common_keymgmt_gen_settable_params)
+#endif /* OPENSSL_NO_ML_DSA */
+
+#ifndef OPENSSL_NO_ML_KEM
+DEFINE_KEYMGMT_FUNCTIONS(mlkem512, EVP_PKEY_ML_KEM_512,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(mlkem768, EVP_PKEY_ML_KEM_768,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(mlkem1024, EVP_PKEY_ML_KEM_1024,
+	common_keymgmt_gen_settable_params)
+#endif /* OPENSSL_NO_ML_KEM */
+
+#ifndef OPENSSL_NO_SLH_DSA
+DEFINE_KEYMGMT_FUNCTIONS(slhdsa_sha2_128s, EVP_PKEY_SLH_DSA_SHA2_128S,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(slhdsa_sha2_128f, EVP_PKEY_SLH_DSA_SHA2_128F,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(slhdsa_sha2_192s, EVP_PKEY_SLH_DSA_SHA2_192S,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(slhdsa_sha2_192f, EVP_PKEY_SLH_DSA_SHA2_192F,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(slhdsa_sha2_256s, EVP_PKEY_SLH_DSA_SHA2_256S,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(slhdsa_sha2_256f, EVP_PKEY_SLH_DSA_SHA2_256F,
+	common_keymgmt_gen_settable_params)
+
+DEFINE_KEYMGMT_FUNCTIONS(slhdsa_shake_128s, EVP_PKEY_SLH_DSA_SHAKE_128S,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(slhdsa_shake_128f, EVP_PKEY_SLH_DSA_SHAKE_128F,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(slhdsa_shake_192s, EVP_PKEY_SLH_DSA_SHAKE_192S,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(slhdsa_shake_192f, EVP_PKEY_SLH_DSA_SHAKE_192F,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(slhdsa_shake_256s, EVP_PKEY_SLH_DSA_SHAKE_256S,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(slhdsa_shake_256f, EVP_PKEY_SLH_DSA_SHAKE_256F,
+	common_keymgmt_gen_settable_params)
+#endif /* OPENSSL_NO_SLH_DSA */
+#endif /* OPENSSL_VERSION_NUMBER >= 0x30500000L */
+
+DEFINE_KEYMGMT_FUNCTIONS(falcon512, EVP_PKEY_FALCON512,
+	common_keymgmt_gen_settable_params)
+DEFINE_KEYMGMT_FUNCTIONS(falcon1024, EVP_PKEY_FALCON1024,
+	common_keymgmt_gen_settable_params)
+
+
+/*
+ * Keymgmt algorithms: must be real key types (e.g. RSA, EC), not provider names.
+ */
 static const OSSL_ALGORITHM p11_keymgmts[] = {
-	{"RSA:rsaEncryption", FIPS_PROPQ, keymgmt_functions, "PKCS#11 RSA keymgm functions"},
-	{"EC:id-ecPublicKey", FIPS_PROPQ, keymgmt_functions, "PKCS#11 EC keymgm functions"},
-	{"ED25519", FIPS_PROPQ, keymgmt_functions, "PKCS#11 Ed25519 keymgm functions"},
-	{"ED448", FIPS_PROPQ, keymgmt_functions, "PKCS#11 Ed448 keymgm functions"},
+	{"RSA:rsaEncryption", PKCS11_PROPQ, rsa_keymgmt_functions,
+		"PKCS#11 RSA keymgm functions"},
+#ifndef OPENSSL_NO_EC
+	{"EC:id-ecPublicKey", PKCS11_PROPQ, ec_keymgmt_functions,
+		"PKCS#11 EC keymgm functions"},
+	{"ECDH", PKCS11_PROPQ, ec_keymgmt_functions,
+		"PKCS#11 key exchange functions"},
+#endif /* OPENSSL_NO_EC */
+#ifndef OPENSSL_NO_ECX
+	{"ED25519", PKCS11_PROPQ, ed25519_keymgmt_functions,
+		"PKCS#11 Ed25519 keymgm functions"},
+	{"ED448", PKCS11_PROPQ, ed448_keymgmt_functions,
+		"PKCS#11 Ed448 keymgm functions"},
+	{"X25519", PKCS11_PROPQ, x25519_keymgmt_functions,
+		"PKCS#11 X25519 keymgm functions"},
+	{"X448", PKCS11_PROPQ, x448_keymgmt_functions,
+		"PKCS#11 X448 keymgm functions"},
+#endif /* OPENSSL_NO_ECX */
+#if OPENSSL_VERSION_NUMBER >= 0x30500000L
+#ifndef OPENSSL_NO_ML_DSA
+	{"ML-DSA-44", PKCS11_PROPQ, mldsa44_keymgmt_functions,
+		"PKCS#11 ML-DSA-44 keymgmt functions"},
+	{"ML-DSA-65", PKCS11_PROPQ, mldsa65_keymgmt_functions,
+		"PKCS#11 ML-DSA-65 keymgmt functions"},
+	{"ML-DSA-87", PKCS11_PROPQ, mldsa87_keymgmt_functions,
+		"PKCS#11 ML-DSA-87 keymgmt functions"},
+#endif /* OPENSSL_NO_ML_DSA */
+#ifndef OPENSSL_NO_ML_KEM
+	{"ML-KEM-512", PKCS11_PROPQ, mlkem512_keymgmt_functions,
+		"PKCS#11 ML-KEM-512 keymgmt functions"},
+	{"ML-KEM-768", PKCS11_PROPQ, mlkem768_keymgmt_functions,
+		"PKCS#11 ML-KEM-768 keymgmt functions"},
+	{"ML-KEM-1024", PKCS11_PROPQ, mlkem1024_keymgmt_functions,
+		"PKCS#11 ML-KEM-1024 keymgmt functions"},
+#endif /* OPENSSL_NO_ML_KEM */
+#ifndef OPENSSL_NO_SLH_DSA
+	{"SLH-DSA-SHA2-128s", PKCS11_PROPQ, slhdsa_sha2_128s_keymgmt_functions,
+		"PKCS#11 SLH-DSA-SHA2-128s keymgmt functions"},
+	{"SLH-DSA-SHA2-128f", PKCS11_PROPQ, slhdsa_sha2_128f_keymgmt_functions,
+		"PKCS#11 SLH-DSA-SHA2-128f keymgmt functions"},
+	{"SLH-DSA-SHA2-192s", PKCS11_PROPQ, slhdsa_sha2_192s_keymgmt_functions,
+		"PKCS#11 SLH-DSA-SHA2-192s keymgmt functions"},
+	{"SLH-DSA-SHA2-192f", PKCS11_PROPQ, slhdsa_sha2_192f_keymgmt_functions,
+		"PKCS#11 SLH-DSA-SHA2-192f keymgmt functions"},
+	{"SLH-DSA-SHA2-256s", PKCS11_PROPQ, slhdsa_sha2_256s_keymgmt_functions,
+		"PKCS#11 SLH-DSA-SHA2-256s keymgmt functions"},
+	{"SLH-DSA-SHA2-256f", PKCS11_PROPQ, slhdsa_sha2_256f_keymgmt_functions,
+		"PKCS#11 SLH-DSA-SHA2-256f keymgmt functions"},
+	{"SLH-DSA-SHAKE-128s", PKCS11_PROPQ, slhdsa_shake_128s_keymgmt_functions,
+		"PKCS#11 SLH-DSA-SHAKE-128s keymgmt functions"},
+	{"SLH-DSA-SHAKE-128f", PKCS11_PROPQ, slhdsa_shake_128f_keymgmt_functions,
+		"PKCS#11 SLH-DSA-SHAKE-128f keymgmt functions"},
+	{"SLH-DSA-SHAKE-192s", PKCS11_PROPQ, slhdsa_shake_192s_keymgmt_functions,
+		"PKCS#11 SLH-DSA-SHAKE-192s keymgmt functions"},
+	{"SLH-DSA-SHAKE-192f", PKCS11_PROPQ, slhdsa_shake_192f_keymgmt_functions,
+		"PKCS#11 SLH-DSA-SHAKE-192f keymgmt functions"},
+	{"SLH-DSA-SHAKE-256s", PKCS11_PROPQ, slhdsa_shake_256s_keymgmt_functions,
+		"PKCS#11 SLH-DSA-SHAKE-256s keymgmt functions"},
+	{"SLH-DSA-SHAKE-256f", PKCS11_PROPQ, slhdsa_shake_256f_keymgmt_functions,
+		"PKCS#11 SLH-DSA-SHAKE-256f keymgmt functions"},
+#endif /* OPENSSL_NO_SLH_DSA */
+#endif /* OPENSSL_VERSION_NUMBER >= 0x30500000L */
+	{"FALCON-512:FN-DSA-512:falcon512", PKCS11_PROPQ, falcon512_keymgmt_functions,
+		"PKCS#11 Falcon-512 keymgmt"},
+	{"FALCON-1024:FN-DSA-1024:falcon1024", PKCS11_PROPQ, falcon1024_keymgmt_functions,
+		"PKCS#11 Falcon-1024 keymgmt"},
 	{NULL, NULL, NULL, NULL}
 };
 
 const OSSL_ALGORITHM p11_signatures[] = {
-	{"PKCS11", FIPS_PROPQ, signature_functions, "PKCS#11 signature functions"},
+	{"PKCS11", PKCS11_PROPQ, signature_functions, "PKCS#11 signature functions"},
 	{NULL, NULL, NULL, NULL}
 };
 
 static const OSSL_ALGORITHM p11_asym_cipher[] = {
-	{"PKCS11", FIPS_PROPQ, asym_cipher_functions, "PKCS#11 asym_cipher functions"},
+	{"PKCS11", PKCS11_PROPQ, asym_cipher_functions, "PKCS#11 asym_cipher functions"},
+	{NULL, NULL, NULL, NULL}
+};
+
+static const OSSL_ALGORITHM p11_keyexch[] = {
+	{"PKCS11", PKCS11_PROPQ, keyexch_functions, "PKCS#11 key exchange functions"},
+	{NULL, NULL, NULL, NULL}
+};
+
+static const OSSL_ALGORITHM p11_asym_kem[] = {
+	{"PKCS11", PKCS11_PROPQ, asym_kem_functions, "PKCS#11 asymmetric kem functions"},
 	{NULL, NULL, NULL, NULL}
 };
 
 static const OSSL_ALGORITHM p11_storemgmt[] = {
-	{"PKCS11", FIPS_PROPQ, store_functions, "PKCS#11 storage functions"},
+	{"PKCS11", PKCS11_PROPQ, store_functions, "PKCS#11 storage functions"},
 	{NULL, NULL, NULL, NULL}
 };
 
@@ -266,6 +506,8 @@ static int provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in
 	*out = provider_functions;
 	*ctx = prov_ctx;
 
+	ERR_load_P11_strings();
+
 	return 1;
 
 err:
@@ -289,6 +531,7 @@ static void provider_teardown(void *ctx)
 		return;
 
 	PROVIDER_CTX_destroy(prov_ctx);
+	ERR_unload_P11_strings();
 	ERR_clear_error();
 }
 
@@ -362,6 +605,10 @@ static const OSSL_ALGORITHM *provider_query_operation(void *ctx,
 		return p11_signatures;
 	case OSSL_OP_ASYM_CIPHER:
 		return p11_asym_cipher;
+	case OSSL_OP_KEYEXCH:
+		return p11_keyexch;
+	case OSSL_OP_KEM:
+		return p11_asym_kem;
 	case OSSL_OP_STORE:
 		return p11_storemgmt;
 	}
@@ -462,9 +709,13 @@ static int keymgmt_match(const void *provkey1, const void *provkey2, int selecti
 			key_checked = p11_public_equal(keydata1, keydata2);
 		}
 		if (!key_checked && (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY)) {
-			/* validate whether the private keys match, not covered by tests */
-			//key_checked = keydata1->is_private && keydata2->is_private && private_match(keydata1, keydata2);
-			/* TODO */
+			/* validate whether the private keys match, not covered by tests
+			 * TODO
+			 * key_checked = p11_keydata_is_private(keydata1) &&
+			 * p11_keydata_is_private(keydata2) &&
+			 * p11_private_equal(keydata1, keydata2);
+			 */
+			key_checked = 0;
 		}
 		ok = ok && key_checked;
 	}
@@ -477,6 +728,8 @@ static const char *keymgmt_query_operation_name(int id)
 	switch (id) {
 	case OSSL_OP_SIGNATURE:
 	case OSSL_OP_ASYM_CIPHER:
+	case OSSL_OP_KEYEXCH:
+	case OSSL_OP_KEM:
 		return "PKCS11";
 	}
 	return NULL;
@@ -487,7 +740,7 @@ static int keymgmt_import(void *provkey, int selection, const OSSL_PARAM *params
 {
 	P11_KEYDATA *keydata = (P11_KEYDATA *)provkey;
 
-	if (keydata == NULL || params == NULL)
+	if (keydata == NULL)
 		return 0;
 
 	if ((selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) == 0)
@@ -529,17 +782,7 @@ static int keymgmt_export(void *provkey, int selection, OSSL_CALLBACK *param_cb,
 	if ((selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) == 0)
 		return 1;
 
-	switch (p11_keydata_get_type(keydata)) {
-	case EVP_PKEY_RSA:
-		return export_rsa_pub(keydata, param_cb, cbarg);
-	case EVP_PKEY_EC:
-		return export_ec_pub(keydata, param_cb, cbarg);
-	case EVP_PKEY_ED25519:
-	case EVP_PKEY_ED448:
-		return export_eddsa_pub(keydata, param_cb, cbarg);
-	default:
-		return 0;
-    }
+	return p11_keydata_export_pub(keydata, param_cb, cbarg);
 }
 
 /* Return supported export parameter types for public key data. */
@@ -549,7 +792,7 @@ static const OSSL_PARAM *keymgmt_export_types(int selection)
 		/* RSA */
 		OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_N, NULL, 0),
 		OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_E, NULL, 0),
-		/* EC, ED25519, ED449 */
+		/* EC, ED25519, ED449, X25519, X448 */
 		OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_GROUP_NAME, NULL, 0),
 		OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_PUB_KEY, NULL, 0),
 		OSSL_PARAM_END
@@ -567,57 +810,7 @@ static const OSSL_PARAM *keymgmt_export_types(int selection)
  */
 static int keymgmt_get_params(void *provkey, OSSL_PARAM params[])
 {
-	P11_KEYDATA *keydata = (P11_KEYDATA *)provkey;
-	const OSSL_PARAM *key_params;
-	const OSSL_PARAM *pub;
-	OSSL_PARAM *p;
-	int bits, secbits;
-#if OPENSSL_VERSION_NUMBER >= 0x30600000L
-	int category;
-#endif /* OPENSSL_VERSION_NUMBER >= 0x30600000L */
-
-	if (keydata == NULL || params == NULL)
-		return 0;
-
-	bits = p11_keydata_get_bits(keydata);
-	secbits = p11_keydata_get_security_bits(keydata);
-#if OPENSSL_VERSION_NUMBER >= 0x30600000L
-	category = p11_keydata_get_security_category(keydata);
-#endif /* OPENSSL_VERSION_NUMBER >= 0x30600000L */
-	key_params = p11_keydata_get_params(keydata);
-
-	/* EVP_PKEY_get_bits(), not covered by tests */
-	p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_BITS);
-	if (p != NULL && !OSSL_PARAM_set_int(p, bits))
-		return 0;
-
-	/* EVP_PKEY_get_security_bits(), not covered by tests */
-	p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_SECURITY_BITS);
-	if (p != NULL && !OSSL_PARAM_set_int(p, secbits))
-		return 0;
-
-	/* EVP_PKEY_get_size() */
-	p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_MAX_SIZE);
-	if (p != NULL && !OSSL_PARAM_set_int(p, (int)p11_keydata_get_sigsize(keydata)))
-		return 0;
-
-#if OPENSSL_VERSION_NUMBER >= 0x30600000L
-	/* EVP_PKEY_get_security_category(), not covered by tests */
-	p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_SECURITY_CATEGORY);
-	if (p != NULL && !OSSL_PARAM_set_int(p, category))
-		return 0;
-#endif /* OPENSSL_VERSION_NUMBER >= 0x30600000L */
-
-	/* EVP_PKEY_get1_encoded_public_key(), not covered by tests */
-	p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY);
-	if (p != NULL &&
-	    p11_keydata_get_type(keydata) == EVP_PKEY_EC && key_params != NULL) {
-		pub = OSSL_PARAM_locate_const(key_params, OSSL_PKEY_PARAM_PUB_KEY);
-		if (pub != NULL && pub->data != NULL &&
-		    !OSSL_PARAM_set_octet_string(p, pub->data, pub->data_size))
-			return 0;
-	}
-	return 1;
+	return p11_keymgmt_get_params(provkey, params);
 }
 
 /* Return list of key parameters that can be retrieved from the key object. */
@@ -631,8 +824,12 @@ static const OSSL_PARAM *keymgmt_gettable_params(void *provctx)
 		OSSL_PARAM_int(OSSL_PKEY_PARAM_SECURITY_CATEGORY, NULL),
 #endif /* OPENSSL_VERSION_NUMBER >= 0x30600000L */
 		OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY, NULL, 0),
+		OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_PUB_KEY, NULL, 0),
+		OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_DEFAULT_DIGEST, NULL, 0),
+		OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_MANDATORY_DIGEST, NULL, 0),
 		OSSL_PARAM_END
 	};
+
 	(void)provctx;
 	return gettable;
 }
@@ -652,6 +849,82 @@ static void *keymgmt_dup(const void *provkey, int selection)
 		return NULL;
 
 	return keydata;
+}
+
+/*
+ * KEYMGMT generation initialization needs to know the concrete key type.
+ * The remaining KEYMGMT callbacks are shared by all supported algorithms.
+ */
+static void *keymgmt_gen_init_common(void *provctx, int type,
+	int selection, const OSSL_PARAM params[])
+{
+	if ((selection & OSSL_KEYMGMT_SELECT_KEYPAIR) == 0)
+		return NULL;
+
+	return p11_keygen_ctx_new(provctx, type, params);
+}
+
+/* Set additional parameters from params in the key object generation context genctx. */
+static int keymgmt_gen_set_params(void *genctx, const OSSL_PARAM params[])
+{
+	return p11_keygen_ctx_set_params(genctx, params);
+}
+
+static const OSSL_PARAM *rsa_keymgmt_gen_settable_params(
+	void *genctx, void *provctx)
+{
+	static const OSSL_PARAM keymgmt_gen_settable_rsa[] = {
+		OSSL_PARAM_utf8_string("pkcs11_uri", NULL, 0),
+		OSSL_PARAM_uint(OSSL_PKEY_PARAM_RSA_BITS, NULL),
+		OSSL_PARAM_END
+	};
+
+	(void)genctx;
+	(void)provctx;
+	return keymgmt_gen_settable_rsa;
+}
+
+#ifndef OPENSSL_NO_EC
+static const OSSL_PARAM *ec_keymgmt_gen_settable_params(
+	void *genctx, void *provctx)
+{
+	static const OSSL_PARAM keymgmt_gen_settable_ec[] = {
+		OSSL_PARAM_utf8_string("pkcs11_uri", NULL, 0),
+		OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_GROUP_NAME, NULL, 0),
+		OSSL_PARAM_END
+	};
+
+	(void)genctx;
+	(void)provctx;
+	return keymgmt_gen_settable_ec;
+}
+#endif /* OPENSSL_NO_EC */
+
+static const OSSL_PARAM *common_keymgmt_gen_settable_params(
+	void *genctx, void *provctx)
+{
+	static const OSSL_PARAM keymgmt_gen_settable_common[] = {
+		OSSL_PARAM_utf8_string("pkcs11_uri", NULL, 0),
+		OSSL_PARAM_END
+	};
+
+	(void)genctx;
+	(void)provctx;
+	return keymgmt_gen_settable_common;
+}
+
+/* Perform the key object generation itself, and return the result. */
+static void *keymgmt_gen(void *genctx, OSSL_CALLBACK *cb, void *cbarg)
+{
+	(void)cb;
+	(void)cbarg;
+	return p11_keygen_ctx_generate(genctx);
+}
+
+/* Clean up and free the key object generation context. */
+static void keymgmt_gen_cleanup(void *genctx)
+{
+	p11_keygen_ctx_free(genctx);
 }
 
 /******************************************************************************/
@@ -699,38 +972,7 @@ static int signature_sign_init(void *ctx, void *provkey, const OSSL_PARAM params
 static int signature_sign(void *ctx, unsigned char *sig, size_t *siglen,
 	size_t sigsize, const unsigned char *tbs, size_t tbslen)
 {
-	P11_SIGNATURE_CTX *sig_ctx = (P11_SIGNATURE_CTX *)ctx;
-	size_t need;
-	int rv;
-
-	if (sig_ctx == NULL || siglen == NULL || tbs == NULL)
-		return 0;
-
-	need = p11_signature_ctx_get_sigsize(sig_ctx);
-	if (need == 0)
-		return 0;
-
-	if (sig == NULL) {
-		*siglen = need;
-		return 1; /* length query */
-	}
-	if (sigsize < need) {
-		*siglen = need;
-		return 0; /* buffer too small */
-	}
-
-	/* do the signing using your PKCS#11 layer */
-	rv = PKCS11_evp_pkey_sign(
-		p11_signature_ctx_get_evp_pkey(sig_ctx),
-		p11_signature_ctx_get_type(sig_ctx),
-		p11_signature_ctx_get_mdname(sig_ctx),
-		p11_signature_ctx_get_pad_mode(sig_ctx),
-		p11_signature_ctx_get_pss_saltlen(sig_ctx),
-		p11_signature_ctx_get_mgf1_mdname(sig_ctx),
-		NULL, 0,
-		sig, siglen, tbs, tbslen);
-
-	return (rv > 0);
+	return p11_signature_ctx_sign(ctx, sig, siglen, sigsize, tbs, tbslen);
 }
 
 /*
@@ -756,6 +998,25 @@ static int signature_verify(void *ctx,
 }
 
 /*
+ * Initialize signature recovery verification operation with key.
+ * Used via EVP_PKEY_verify_recover_init().
+ */
+static int signature_verify_recover_init(void *ctx, void *keydata, const OSSL_PARAM params[])
+{
+	return p11_signature_ctx_init(ctx, keydata, params);
+}
+
+/*
+ * Recover signed data from signature.
+ * Used after signature_verify_recover_init() and via EVP_PKEY_verify_recover().
+ */
+static int signature_verify_recover(void *ctx, unsigned char *rout, size_t *routlen,
+	size_t routsize, const unsigned char *sig, size_t siglen)
+{
+	return p11_signature_ctx_verifyrecover(ctx, rout, routlen, routsize, sig, siglen);
+}
+
+/*
  * Initialize the signing context.
  * For Ed25519/Ed448, mdname is ignored and one-shot DigestSign is used.
  * For RSA/EC, mdname is required and DigestSignUpdate/Final use mdctx.
@@ -764,44 +1025,9 @@ static int signature_verify(void *ctx,
 static int signature_digest_sign_init(void *ctx, const char *mdname, void *provkey,
 	const OSSL_PARAM params[])
 {
-	P11_SIGNATURE_CTX *sig_ctx = (P11_SIGNATURE_CTX *)ctx;
-	P11_KEYDATA *keydata = (P11_KEYDATA *)provkey;
-	EVP_MD_CTX *mdctx;
-	const EVP_MD *md;
-
-	if (sig_ctx == NULL || keydata == NULL)
-		return 0;
-
-	if (!p11_signature_ctx_init(sig_ctx, keydata, params))
-		return 0;
-
-	if (p11_keydata_get_type(keydata) == EVP_PKEY_ED25519 ||
-		p11_keydata_get_type(keydata) == EVP_PKEY_ED448)
-		return 1; /* Ed25519 / Ed448 do not use an external digest */
-
-	/* For signature algorithms the default digest algorithm is SHA256 */
-	if (mdname == NULL)
-		mdname = "SHA256";
-
-	md = EVP_get_digestbyname(mdname);
-	if (md == NULL)
-		return 0;
-
-	if (!p11_signature_ctx_init_digest(sig_ctx))
-		return 0;
-
-	if (!p11_signature_ctx_set_mdname(sig_ctx, mdname))
-		return 0;
-
-	mdctx = p11_signature_ctx_get_mdctx(sig_ctx);
-	if (mdctx == NULL)
-		return 0;
-
-	if (EVP_DigestInit_ex2(mdctx, md, params) != 1)
-		return 0;
-
-	return 1;
+	return p11_signature_digest_sign_init(ctx, mdname, provkey, params);
 }
+
 /*
  * Update digest context with input data for signature operation.
  * Used via EVP_DigestSignUpdate().
@@ -809,30 +1035,7 @@ static int signature_digest_sign_init(void *ctx, const char *mdname, void *provk
 static int signature_digest_sign_update(void *ctx, const unsigned char *data,
 	size_t datalen)
 {
-	P11_SIGNATURE_CTX *sig_ctx = (P11_SIGNATURE_CTX *)ctx;
-	EVP_MD_CTX *mdctx;
-
-	if (sig_ctx == NULL || data == NULL)
-		return 0;
-
-	switch (p11_signature_ctx_get_type(sig_ctx)) {
-	case EVP_PKEY_ED25519:
-	case EVP_PKEY_ED448:
-		/* EdDSA does not support streaming DigestSignUpdate/Final */
-		return 0;
-
-	case EVP_PKEY_RSA:
-	case EVP_PKEY_RSA_PSS:
-	case EVP_PKEY_EC:
-		mdctx = p11_signature_ctx_get_mdctx(sig_ctx);
-		if (mdctx == NULL)
-			return 0;
-		return EVP_DigestUpdate(mdctx, data, datalen) == 1;
-
-	default:
-		return 0;
-	}
-	return 0;
+	return p11_signature_digest_sign_update(ctx, data, datalen);
 }
 
 /*
@@ -842,62 +1045,7 @@ static int signature_digest_sign_update(void *ctx, const unsigned char *data,
 static int signature_digest_sign_final(void *ctx, unsigned char *sig,
 	size_t *siglen, size_t sigsize)
 {
-	P11_SIGNATURE_CTX *sig_ctx = (P11_SIGNATURE_CTX *)ctx;
-	EVP_MD_CTX *mdctx;
-	unsigned char md[EVP_MAX_MD_SIZE];
-	unsigned int mdlen = 0;
-	size_t need, rv;
-
-	if (sig_ctx == NULL || siglen == NULL)
-		return 0;
-
-	switch (p11_signature_ctx_get_type(sig_ctx)) {
-	case EVP_PKEY_ED25519:
-	case EVP_PKEY_ED448:
-		/* EdDSA should use one-shot signature_digest_sign() */
-		return 0;
-
-	case EVP_PKEY_RSA:
-	case EVP_PKEY_RSA_PSS:
-	case EVP_PKEY_EC:
-		break;
-
-	default:
-		return 0;
-	}
-
-	need = p11_signature_ctx_get_sigsize(sig_ctx);
-	if (need == 0)
-		return 0;
-
-	if (sig == NULL) {
-		*siglen = need;
-		return 1; /* length query */
-	}
-
-	if (sigsize < need) {
-		*siglen = need; /* buffer too small */
-		return 0;
-	}
-
-	mdctx = p11_signature_ctx_get_mdctx(sig_ctx);
-	if (mdctx == NULL)
-		return 0;
-
-	if (EVP_DigestFinal_ex(mdctx, md, &mdlen) != 1)
-		return 0;
-
-	rv = PKCS11_evp_pkey_sign(
-		p11_signature_ctx_get_evp_pkey(sig_ctx),
-		p11_signature_ctx_get_type(sig_ctx),
-		p11_signature_ctx_get_mdname(sig_ctx),
-		p11_signature_ctx_get_pad_mode(sig_ctx),
-		p11_signature_ctx_get_pss_saltlen(sig_ctx),
-		p11_signature_ctx_get_mgf1_mdname(sig_ctx),
-		NULL, 0,
-		sig, siglen, md, (size_t)mdlen);
-
-	return (rv > 0);
+	return p11_signature_digest_sign_final(ctx, sig, siglen, sigsize);
 }
 
 /*
@@ -907,71 +1055,7 @@ static int signature_digest_sign_final(void *ctx, unsigned char *sig,
 static int signature_digest_sign(void *ctx, unsigned char *sig, size_t *siglen,
 	size_t sigsize, const unsigned char *tbs, size_t tbslen)
 {
-	P11_SIGNATURE_CTX *sig_ctx = (P11_SIGNATURE_CTX *)ctx;
-	unsigned char md[EVP_MAX_MD_SIZE];
-	unsigned int mdlen = 0;
-	const char *mdname;
-	const EVP_MD *mdalg;
-	size_t need;
-	int rv;
-
-	if (sig_ctx == NULL || siglen == NULL || tbs == NULL)
-		return 0;
-
-	need = p11_signature_ctx_get_sigsize(sig_ctx);
-	if (need == 0)
-		return 0;
-
-	if (sig == NULL) {
-		*siglen = need;
-		return 1; /* length query */
-	}
-
-	if (sigsize < need) {
-		*siglen = need;
-		return 0; /* buffer too small */
-	}
-
-	switch (p11_signature_ctx_get_type(sig_ctx)) {
-	case EVP_PKEY_ED25519:
-	case EVP_PKEY_ED448:
-		/* EdDSA signs the message directly */
-		rv = PKCS11_evp_pkey_sign(
-			p11_signature_ctx_get_evp_pkey(sig_ctx),
-			p11_signature_ctx_get_type(sig_ctx),
-			NULL, 0, 0, NULL,
-			NULL, 0,
-			sig, siglen, tbs, tbslen);
-		return (rv > 0);
-
-	case EVP_PKEY_RSA:
-	case EVP_PKEY_RSA_PSS:
-	case EVP_PKEY_EC:
-		mdname = p11_signature_ctx_get_mdname(sig_ctx);
-		if (mdname == NULL)
-			return 0;
-
-		mdalg = EVP_get_digestbyname(mdname);
-		if (mdalg == NULL)
-			return 0;
-
-		if (EVP_Digest(tbs, tbslen, md, &mdlen, mdalg, NULL) != 1)
-			return 0;
-
-		rv = PKCS11_evp_pkey_sign(
-			p11_signature_ctx_get_evp_pkey(sig_ctx),
-			p11_signature_ctx_get_type(sig_ctx),
-			p11_signature_ctx_get_mdname(sig_ctx),
-			p11_signature_ctx_get_pad_mode(sig_ctx),
-			p11_signature_ctx_get_pss_saltlen(sig_ctx),
-			p11_signature_ctx_get_mgf1_mdname(sig_ctx),
-			NULL, 0,
-			sig, siglen, md, (size_t)mdlen);
-		return (rv > 0);
-
-	default:
-		return 0;
-	}
+	return p11_signature_digest_sign(ctx, sig, siglen, sigsize, tbs, tbslen);
 }
 
 /*
@@ -984,43 +1068,7 @@ static int signature_digest_sign(void *ctx, unsigned char *sig, size_t *siglen,
 static int signature_digest_verify_init(void *ctx, const char *mdname,
 	void *provkey, const OSSL_PARAM params[])
 {
-	P11_SIGNATURE_CTX *sig_ctx = (P11_SIGNATURE_CTX *)ctx;
-	P11_KEYDATA *keydata = (P11_KEYDATA *)provkey;
-	EVP_MD_CTX *mdctx;
-	const EVP_MD *md;
-
-	if (sig_ctx == NULL || keydata == NULL)
-		return 0;
-
-	if (!p11_signature_ctx_init(sig_ctx, keydata, params))
-		return 0;
-
-	if (p11_keydata_get_type(keydata) == EVP_PKEY_ED25519 ||
-		p11_keydata_get_type(keydata) == EVP_PKEY_ED448)
-		return 1; /* Ed25519 / Ed448 do not use an external digest */
-
-	/* For signature algorithms the default digest algorithm is SHA256 */
-	if (mdname == NULL)
-		mdname = "SHA256";
-
-	md = EVP_get_digestbyname(mdname);
-	if (md == NULL)
-		return 0;
-
-	if (!p11_signature_ctx_init_digest(sig_ctx))
-		return 0;
-
-	if (!p11_signature_ctx_set_mdname(sig_ctx, mdname))
-		return 0;
-
-	mdctx = p11_signature_ctx_get_mdctx(sig_ctx);
-	if (mdctx == NULL)
-		return 0;
-
-	if (EVP_DigestInit_ex2(mdctx, md, params) != 1)
-		return 0;
-
-	return 1;
+	return p11_signature_digest_verify_init(ctx, mdname, provkey, params);
 }
 
 /*
@@ -1030,30 +1078,7 @@ static int signature_digest_verify_init(void *ctx, const char *mdname,
 static int signature_digest_verify_update(void *ctx, const unsigned char *data,
 	size_t datalen)
 {
-	P11_SIGNATURE_CTX *sig_ctx = (P11_SIGNATURE_CTX *)ctx;
-	EVP_MD_CTX *mdctx;
-
-	if (sig_ctx == NULL || data == NULL)
-		return 0;
-
-	switch (p11_signature_ctx_get_type(sig_ctx)) {
-	case EVP_PKEY_ED25519:
-	case EVP_PKEY_ED448:
-		/* EdDSA does not support streaming DigestVerifyUpdate/Final */
-		return 0;
-
-	case EVP_PKEY_RSA:
-	case EVP_PKEY_RSA_PSS:
-	case EVP_PKEY_EC:
-		mdctx = p11_signature_ctx_get_mdctx(sig_ctx);
-		if (mdctx == NULL)
-			return 0;
-		return EVP_DigestUpdate(mdctx, data, datalen) == 1;
-
-	default:
-		return 0;
-	}
-	return 0;
+	return p11_signature_digest_verify_update(ctx, data, datalen);
 }
 
 /*
@@ -1063,37 +1088,7 @@ static int signature_digest_verify_update(void *ctx, const unsigned char *data,
 static int signature_digest_verify_final(void *ctx, const unsigned char *sig,
 	size_t siglen)
 {
-	P11_SIGNATURE_CTX *sig_ctx = (P11_SIGNATURE_CTX *)ctx;
-	EVP_MD_CTX *mdctx;
-	unsigned char md[EVP_MAX_MD_SIZE];
-	unsigned int mdlen = 0;
-
-	if (sig_ctx == NULL || sig == NULL)
-		return 0;
-
-	switch (p11_signature_ctx_get_type(sig_ctx)) {
-	case EVP_PKEY_ED25519:
-	case EVP_PKEY_ED448:
-		/* EdDSA should use one-shot EVP_DigestVerify() */
-		return 0;
-
-	case EVP_PKEY_RSA:
-	case EVP_PKEY_RSA_PSS:
-	case EVP_PKEY_EC:
-		break;
-
-	default:
-		return 0;
-	}
-
-	mdctx = p11_signature_ctx_get_mdctx(sig_ctx);
-	if (mdctx == NULL)
-		return 0;
-
-	if (EVP_DigestFinal_ex(mdctx, md, &mdlen) != 1)
-		return 0;
-
-	return p11_signature_ctx_verify(sig_ctx, sig, siglen, md, (size_t)mdlen);
+	return p11_signature_digest_verify_final(ctx, sig, siglen);
 }
 
 /*
@@ -1104,117 +1099,42 @@ static int signature_digest_verify(void *ctx,
 	const unsigned char *sig, size_t siglen,
 	const unsigned char *tbs, size_t tbslen)
 {
-	P11_SIGNATURE_CTX *sig_ctx = (P11_SIGNATURE_CTX *)ctx;
-	unsigned char md[EVP_MAX_MD_SIZE];
-	unsigned int mdlen = 0;
-	const char *mdname;
-	const EVP_MD *mdalg;
-
-	if (sig_ctx == NULL || sig == NULL || tbs == NULL)
-		return 0;
-
-	switch (p11_signature_ctx_get_type(sig_ctx)) {
-	case EVP_PKEY_ED25519:
-	case EVP_PKEY_ED448:
-		/* EdDSA verifies the message directly */
-		return p11_signature_ctx_verify(sig_ctx, sig, siglen, tbs, tbslen);
-
-	case EVP_PKEY_RSA:
-	case EVP_PKEY_RSA_PSS:
-	case EVP_PKEY_EC:
-		mdname = p11_signature_ctx_get_mdname(sig_ctx);
-		if (mdname == NULL)
-			return 0;
-
-		mdalg = EVP_get_digestbyname(mdname);
-		if (mdalg == NULL)
-			return 0;
-
-		if (EVP_Digest(tbs, tbslen, md, &mdlen, mdalg, NULL) != 1)
-			return 0;
-
-		return p11_signature_ctx_verify(sig_ctx, sig, siglen, md, (size_t)mdlen);
-
-	default:
-		return 0;
-	}
-	return 0;
+	return p11_signature_digest_verify(ctx, sig, siglen, tbs, tbslen);
 }
 
-/* Get signature context parameters. */
+/* Get signature context parameters, EVP_PKEY_CTX_get_params(). */
 static int signature_get_ctx_params(void *vctx, OSSL_PARAM params[])
 {
-	P11_SIGNATURE_CTX *sig_ctx = (P11_SIGNATURE_CTX *)vctx;
-	OSSL_PARAM *p;
-	const char *mdname;
-	const char *mgf1_mdname;
-	const char *pad_mode_str;
-	int pad_mode;
-	int pss_saltlen;
-
-	if (sig_ctx == NULL)
-		return 0;
-
-	if (params == NULL)
-		return 1;
-
-	mdname = p11_signature_ctx_get_mdname(sig_ctx);
-	pad_mode = p11_signature_ctx_get_pad_mode(sig_ctx);
-	mgf1_mdname = p11_signature_ctx_get_mgf1_mdname(sig_ctx);
-	pss_saltlen = p11_signature_ctx_get_pss_saltlen(sig_ctx);
-
-	/* digest, EVP_PKEY_CTX_get_signature_md() */
-	p = OSSL_PARAM_locate(params, OSSL_SIGNATURE_PARAM_DIGEST);
-	if (p != NULL && mdname != NULL) {
-		if (!OSSL_PARAM_set_utf8_string(p, mdname))
-			return 0;
-	}
-
-	/* pad-mode (RSA), EVP_PKEY_CTX_get_rsa_padding() */
-	p = OSSL_PARAM_locate(params, OSSL_SIGNATURE_PARAM_PAD_MODE);
-	if (p != NULL) {
-		if (p->data_type == OSSL_PARAM_INTEGER) {
-			if (!OSSL_PARAM_set_int(p, pad_mode))
-				return 0;
-		} else if (p->data_type == OSSL_PARAM_UTF8_STRING) {
-			pad_mode_str = p11_signature_pad_mode_to_string(pad_mode);
-			if (pad_mode_str == NULL ||
-			    !OSSL_PARAM_set_utf8_string(p, pad_mode_str))
-				return 0;
-		}
-	}
-
-	/* mgf1-digest,
-	 * EVP_PKEY_CTX_get_rsa_mgf1_md(),
-	 * EVP_PKEY_CTX_get_rsa_mgf1_md_name() */
-	p = OSSL_PARAM_locate(params, OSSL_SIGNATURE_PARAM_MGF1_DIGEST);
-	if (p != NULL && pad_mode == RSA_PKCS1_PSS_PADDING) {
-		const char *mgf1 = (mgf1_mdname != NULL) ? mgf1_mdname : mdname;
-
-		if (mgf1 == NULL || !OSSL_PARAM_set_utf8_string(p, mgf1))
-			return 0;
-	}
-
-	/* pss-saltlen, EVP_PKEY_CTX_get_rsa_pss_saltlen() */
-	p = OSSL_PARAM_locate(params, OSSL_SIGNATURE_PARAM_PSS_SALTLEN);
-	if (p != NULL && pad_mode == RSA_PKCS1_PSS_PADDING) {
-		if (p->data_type == OSSL_PARAM_INTEGER) {
-			if (!OSSL_PARAM_set_int(p, pss_saltlen))
-				return 0;
-		} else if (p->data_type == OSSL_PARAM_UTF8_STRING) {
-			const char *saltlen_str =
-				p11_signature_pss_saltlen_to_string(pss_saltlen);
-
-			if (saltlen_str == NULL ||
-			    !OSSL_PARAM_set_utf8_string(p, saltlen_str))
-				return 0;
-		}
-	}
-	return 1;
+	return p11_signature_ctx_get_params(vctx, params);
 }
 
 /* Return signature context parameters that can be retrieved. */
 static const OSSL_PARAM *signature_gettable_ctx_params(void *ctx, void *provctx)
+{
+	static const OSSL_PARAM gettable[] = {
+		OSSL_PARAM_utf8_string(OSSL_SIGNATURE_PARAM_DIGEST, NULL, 0),
+		OSSL_PARAM_octet_string(OSSL_SIGNATURE_PARAM_ALGORITHM_ID, NULL, 0),
+		OSSL_PARAM_utf8_string(OSSL_SIGNATURE_PARAM_PAD_MODE, NULL, 0),
+		OSSL_PARAM_int(OSSL_SIGNATURE_PARAM_PAD_MODE, NULL),
+		OSSL_PARAM_utf8_string(OSSL_SIGNATURE_PARAM_MGF1_DIGEST, NULL, 0),
+		OSSL_PARAM_utf8_string(OSSL_SIGNATURE_PARAM_PSS_SALTLEN, NULL, 0),
+		OSSL_PARAM_int(OSSL_SIGNATURE_PARAM_PSS_SALTLEN, NULL),
+		OSSL_PARAM_END
+	};
+
+	(void)ctx;
+	(void)provctx;
+	return gettable;
+}
+
+/* Set signature context parameters (digest, padding, PSS options) */
+static int signature_set_ctx_params(void *ctx, const OSSL_PARAM params[])
+{
+	return p11_signature_ctx_set_params(ctx, params);
+}
+
+/* Return signature context parameters that can be retrieved */
+static const OSSL_PARAM *signature_settable_ctx_params(void *ctx, void *provctx)
 {
 	static const OSSL_PARAM settable[] = {
 		OSSL_PARAM_utf8_string(OSSL_SIGNATURE_PARAM_DIGEST, NULL, 0),
@@ -1229,93 +1149,6 @@ static const OSSL_PARAM *signature_gettable_ctx_params(void *ctx, void *provctx)
 	(void)ctx;
 	(void)provctx;
 	return settable;
-}
-
-/* Set signature context parameters (digest, padding, PSS options) */
-static int signature_set_ctx_params(void *ctx, const OSSL_PARAM params[])
-{
-	P11_SIGNATURE_CTX *sig_ctx = (P11_SIGNATURE_CTX *)ctx;
-	const OSSL_PARAM *p;
-	int pad_mode;
-
-	if (sig_ctx == NULL)
-		return 0;
-
-	if (params == NULL)
-		return 1;
-
-	/* digest, EVP_PKEY_CTX_set_signature_md() */
-	p = OSSL_PARAM_locate_const(params, OSSL_SIGNATURE_PARAM_DIGEST);
-	if (p != NULL) {
-		const char *s = NULL;
-
-		if (!OSSL_PARAM_get_utf8_string_ptr(p, &s) || s == NULL)
-			return 0;
-
-		if (!p11_signature_ctx_set_mdname(sig_ctx, s))
-			return 0;
-	}
-
-	/* pad-mode (RSA), EVP_PKEY_CTX_set_rsa_padding(), -pkeyopt rsa_padding_mode */
-	p = OSSL_PARAM_locate_const(params, OSSL_SIGNATURE_PARAM_PAD_MODE);
-	if (p != NULL) {
-		if (!pad_mode_from_param(p, &pad_mode))
-			return 0;
-
-		if (!p11_signature_ctx_set_pad_mode(sig_ctx, pad_mode))
-			return 0;
-	}
-
-	/* PSS-only params (RSA) */
-	if (p11_signature_ctx_get_pad_mode(sig_ctx) == RSA_PKCS1_PSS_PADDING) {
-		/* mgf1-digest, EVP_PKEY_CTX_set_rsa_mgf1_md() */
-		p = OSSL_PARAM_locate_const(params, OSSL_SIGNATURE_PARAM_MGF1_DIGEST);
-		if (p != NULL) {
-			const char *mgf1 = NULL;
-
-			if (!OSSL_PARAM_get_utf8_string_ptr(p, &mgf1) || mgf1 == NULL)
-				return 0;
-
-			if (!p11_signature_ctx_set_mgf1_mdname(sig_ctx, mgf1))
-				return 0;
-		}
-
-		/* pss-saltlen, EVP_PKEY_CTX_set_rsa_pss_saltlen(), -pkeyopt rsa_pss_saltlen */
-		p = OSSL_PARAM_locate_const(params, OSSL_SIGNATURE_PARAM_PSS_SALTLEN);
-		if (p != NULL) {
-			int saltlen = 0;
-			const char *s = NULL;
-
-			if (OSSL_PARAM_get_int(p, &saltlen)) {
-				/* got int directly */
-			} else if (OSSL_PARAM_get_utf8_string_ptr(p, &s) && s != NULL) {
-				if (OPENSSL_strcasecmp(s, "digest") == 0)
-					saltlen = RSA_PSS_SALTLEN_DIGEST; /* -1 */
-				else if (OPENSSL_strcasecmp(s, "auto") == 0)
-					saltlen = RSA_PSS_SALTLEN_AUTO; /* -2 */
-				else if (OPENSSL_strcasecmp(s, "max") == 0)
-					saltlen = RSA_PSS_SALTLEN_MAX; /* -3 */
-#ifdef RSA_PSS_SALTLEN_AUTO_DIGEST_MAX
-				else if (OPENSSL_strcasecmp(s, "auto-digestmax") == 0)
-					saltlen = RSA_PSS_SALTLEN_AUTO_DIGEST_MAX; /* -4 */
-#endif /* RSA_PSS_SALTLEN_AUTO_DIGEST_MAX */
-				else
-					saltlen = atoi(s); /* minimalistic */
-			} else {
-				return 0;
-			}
-
-			if (!p11_signature_ctx_set_pss_saltlen(sig_ctx, saltlen))
-				return 0;
-		}
-	}
-	return 1;
-}
-
-/* Return signature context parameters that can be retrieved (same as gettable) */
-static const OSSL_PARAM *signature_settable_ctx_params(void *ctx, void *provctx)
-{
-	return signature_gettable_ctx_params(ctx, provctx);
 }
 
 
@@ -1356,16 +1189,7 @@ static int asym_cipher_encrypt_init(void *ctx, void *provkey, const OSSL_PARAM p
 static int asym_cipher_encrypt(void *ctx, unsigned char *out, size_t *outlen,
 	size_t outsize, const unsigned char *in, size_t inlen)
 {
-	P11_ASYM_CIPHER_CTX *asym_ctx = (P11_ASYM_CIPHER_CTX *)ctx;
-	int rv;
-
-	if (asym_ctx == NULL)
-		return 0;
-
-	rv = p11_asym_cipher_ctx_encrypt(asym_ctx, out, outlen, outsize, in, inlen);
-	if (rv <= 0)
-		return 0;
-	return 1;
+	return p11_asym_cipher_ctx_encrypt(ctx, out, outlen, outsize, in, inlen);
 }
 
 /* Initialize decryption operation with key */
@@ -1378,126 +1202,13 @@ static int asym_cipher_decrypt_init(void *ctx, void *provkey, const OSSL_PARAM p
 static int asym_cipher_decrypt(void *ctx, unsigned char *out, size_t *outlen,
 	size_t outsize, const unsigned char *in, size_t inlen)
 {
-	P11_ASYM_CIPHER_CTX *asym_ctx = (P11_ASYM_CIPHER_CTX *)ctx;
-	size_t need;
-	int rv;
-
-	if (asym_ctx == NULL || outlen == NULL || in == NULL)
-		return 0;
-
-	need = p11_asym_cipher_ctx_get_outsize(asym_ctx);
-	if (need == 0)
-		return 0;
-
-	if (out == NULL) {
-		/* For RSA decrypt the plaintext is at most modulus size.
-		 * The exact OAEP plaintext length is only known after decrypt,
-		 * so return a safe upper bound. */
-		*outlen = need; /* length query */
-		return 1;
-	}
-
-	if (outsize < need) {
-		*outlen = need;
-		return 0; /* buffer too small */
-	}
-
-	rv = PKCS11_evp_pkey_decrypt(
-		p11_asym_cipher_ctx_get_evp_pkey(asym_ctx),
-		p11_asym_cipher_ctx_get_type(asym_ctx),
-		p11_asym_cipher_ctx_get_oaep_mdname(asym_ctx),
-		p11_asym_cipher_ctx_get_pad_mode(asym_ctx),
-		p11_asym_cipher_ctx_get_mgf1_mdname(asym_ctx),
-		p11_asym_cipher_ctx_get_oaep_label(asym_ctx),
-		p11_asym_cipher_ctx_get_oaep_labellen(asym_ctx),
-		out, outlen, &outsize, in, inlen);
-	return (rv > 0);
+	return p11_asym_cipher_ctx_decrypt(ctx, out, outlen, outsize, in, inlen);
 }
 
 /* Get asymmetric cipher context parameters. */
 static int asym_cipher_get_ctx_params(void *vctx, OSSL_PARAM params[])
 {
-	P11_ASYM_CIPHER_CTX *asym_ctx = (P11_ASYM_CIPHER_CTX *)vctx;
-	OSSL_PARAM *p;
-	const char *pad_mode_str = NULL;
-	const char *oaep_mdname;
-	const char *mgf1_mdname;
-	int pad_mode;
-
-	if (asym_ctx == NULL)
-		return 0;
-
-	if (params == NULL)
-		return 1;
-
-	pad_mode = p11_asym_cipher_ctx_get_pad_mode(asym_ctx);
-
-	/* defaults */
-	oaep_mdname = p11_asym_cipher_ctx_get_oaep_mdname(asym_ctx);
-	if (oaep_mdname == NULL)
-		oaep_mdname = "SHA1";
-
-	mgf1_mdname = p11_asym_cipher_ctx_get_mgf1_mdname(asym_ctx);
-	if (mgf1_mdname == NULL)
-		mgf1_mdname = oaep_mdname;
-
-	switch (pad_mode) {
-	case RSA_NO_PADDING:
-		pad_mode_str = OSSL_PKEY_RSA_PAD_MODE_NONE;
-		break;
-	case RSA_PKCS1_PADDING:
-		pad_mode_str = OSSL_PKEY_RSA_PAD_MODE_PKCSV15;
-		break;
-	case RSA_PKCS1_OAEP_PADDING:
-		pad_mode_str = OSSL_PKEY_RSA_PAD_MODE_OAEP;
-		break;
-	default:
-		pad_mode_str = NULL;
-		break;
-	}
-
-	/* EVP_PKEY_CTX_get_rsa_padding(), not covered by tests */
-	p = OSSL_PARAM_locate(params, OSSL_ASYM_CIPHER_PARAM_PAD_MODE);
-	if (p != NULL) {
-		if (p->data_type == OSSL_PARAM_INTEGER) {
-			if (!OSSL_PARAM_set_int(p, pad_mode))
-				return 0;
-		} else if (p->data_type == OSSL_PARAM_UTF8_STRING) {
-			if (pad_mode_str == NULL ||
-			    !OSSL_PARAM_set_utf8_string(p, pad_mode_str))
-				return 0;
-		}
-	}
-
-	/* EVP_PKEY_CTX_get_rsa_oaep_md(), not covered by tests
-	 * EVP_PKEY_CTX_get_rsa_oaep_md_name(), not covered by tests */
-	p = OSSL_PARAM_locate(params, OSSL_ASYM_CIPHER_PARAM_OAEP_DIGEST);
-	if (p != NULL && pad_mode == RSA_PKCS1_OAEP_PADDING &&
-		!OSSL_PARAM_set_utf8_string(p, oaep_mdname))
-		return 0;
-
-	/* EVP_PKEY_CTX_get_rsa_mgf1_md(), not covered by tests
-	 * EVP_PKEY_CTX_get_rsa_mgf1_md_name(), not covered by tests */
-	p = OSSL_PARAM_locate(params, OSSL_ASYM_CIPHER_PARAM_MGF1_DIGEST);
-	if (p != NULL && pad_mode == RSA_PKCS1_OAEP_PADDING &&
-		!OSSL_PARAM_set_utf8_string(p, mgf1_mdname))
-		return 0;
-
-	/* EVP_PKEY_CTX_get0_rsa_oaep_label(), not covered by tests */
-	p = OSSL_PARAM_locate(params, OSSL_ASYM_CIPHER_PARAM_OAEP_LABEL);
-	if (p != NULL && pad_mode == RSA_PKCS1_OAEP_PADDING) {
-		unsigned char *label = p11_asym_cipher_ctx_get_oaep_label(asym_ctx);
-		size_t labellen = p11_asym_cipher_ctx_get_oaep_labellen(asym_ctx);
-
-		if (label != NULL) {
-			if (!OSSL_PARAM_set_octet_string(p, label, labellen))
-				return 0;
-		} else {
-			if (!OSSL_PARAM_set_octet_string(p, NULL, 0))
-				return 0;
-		}
-	}
-	return 1;
+	return p11_asym_cipher_ctx_get_params(vctx, params);
 }
 
 /* Return asymmetric cipher context parameters that can be retrieved. */
@@ -1520,73 +1231,193 @@ static const OSSL_PARAM *asym_cipher_gettable_ctx_params(void *ctx, void *provct
 /* Set asymmetric cipher context parameters from OSSL_PARAM input */
 static int asym_cipher_set_ctx_params(void *vctx, const OSSL_PARAM params[])
 {
-	P11_ASYM_CIPHER_CTX *asym_ctx = (P11_ASYM_CIPHER_CTX *)vctx;
-	const OSSL_PARAM *p;
-	const char *str = NULL;
-	int pad_mode;
-
-	if (asym_ctx == NULL)
-		return 0;
-
-	if (params == NULL)
-		return 1;
-
-	/* PAD_MODE (can be int or string)
-	 * EVP_PKEY_CTX_set_rsa_padding(), -pkeyopt rsa_padding_mode:oaep */
-	p = OSSL_PARAM_locate_const(params, OSSL_ASYM_CIPHER_PARAM_PAD_MODE);
-	if (p != NULL) {
-		if (!pad_mode_from_param(p, &pad_mode))
-			return 0;
-
-		if (!p11_asym_cipher_ctx_set_pad_mode(asym_ctx, pad_mode))
-			return 0;
-	}
-
-	/* OAEP digest
-	 * EVP_PKEY_CTX_set_rsa_oaep_md(), not covered by tests
-	 * EVP_PKEY_CTX_set_rsa_oaep_md_name(), not covered by tests */
-	p = OSSL_PARAM_locate_const(params, OSSL_ASYM_CIPHER_PARAM_OAEP_DIGEST);
-	if (p != NULL) {
-		if (!OSSL_PARAM_get_utf8_string_ptr(p, &str) || str == NULL)
-			return 0;
-
-		if (!p11_asym_cipher_ctx_set_oaep_mdname(asym_ctx, str))
-			return 0;
-	}
-
-	/* MGF1 digest
-	 * EVP_PKEY_CTX_set_rsa_mgf1_md(), not covered by tests
-	 * EVP_PKEY_CTX_set_rsa_mgf1_md_name(), not covered by tests */
-	p = OSSL_PARAM_locate_const(params, OSSL_ASYM_CIPHER_PARAM_MGF1_DIGEST);
-	if (p != NULL) {
-		if (!OSSL_PARAM_get_utf8_string_ptr(p, &str) || str == NULL)
-			return 0;
-
-		if (!p11_asym_cipher_ctx_set_mgf1_mdname(asym_ctx, str))
-			return 0;
-	}
-
-	/* OAEP label
-	 * EVP_PKEY_CTX_set0_rsa_oaep_label(), not covered by tests */
-	p = OSSL_PARAM_locate_const(params, OSSL_ASYM_CIPHER_PARAM_OAEP_LABEL);
-	if (p != NULL) {
-		if (p->data_type != OSSL_PARAM_OCTET_STRING)
-			return 0;
-
-		if (p->data_size > 0 && p->data == NULL)
-			return 0;
-
-		if (!p11_asym_cipher_ctx_set_oaep_label(asym_ctx, p->data, p->data_size))
-			return 0;
-	}
-
-	return 1;
+	return p11_asym_cipher_ctx_set_params(vctx, params);
 }
 
 /* Return asymmetric cipher context parameters that can be set (same as gettable) */
 static const OSSL_PARAM *asym_cipher_settable_ctx_params(void *ctx, void *provctx)
 {
 	return asym_cipher_gettable_ctx_params(ctx, provctx);
+}
+
+
+/******************************************************************************/
+/* Key exchange functions                                                     */
+/******************************************************************************/
+
+/* Create and initialize key exchange context. */
+static void *keyexch_newctx(void *provctx)
+{
+	return p11_keyexch_ctx_new(provctx);
+}
+
+/* Free key exchange context. */
+static void keyexch_freectx(void *ctx)
+{
+	p11_keyexch_ctx_free(ctx);
+}
+
+/* Duplicate key exchange context. */
+static void *keyexch_dupctx(void *ctx)
+{
+	return p11_keyexch_dupctx(ctx);
+}
+
+/* Initialize a key exchange operation with the local private key. */
+static int keyexch_init(void *ctx, void *provkey, const OSSL_PARAM params[])
+{
+	return p11_keyexch_ctx_init(ctx, provkey, params);
+}
+
+/* Set the peer public key for shared-secret derivation. */
+static int keyexch_set_peer(void *ctx, void *provkey)
+{
+	return p11_keyexch_ctx_set_peer(ctx, provkey);
+}
+
+/* Derive the shared secret, or return the required output size. */
+static int keyexch_derive(void *ctx,
+	unsigned char *secret, size_t *secretlen, size_t outlen)
+{
+	return p11_keyexch_ctx_derive(ctx, secret, secretlen, outlen);
+}
+
+/* Return current key exchange context parameters. */
+static int keyexch_get_ctx_params(void *ctx, OSSL_PARAM params[])
+{
+	return p11_keyexch_ctx_get_params(ctx, params);
+}
+
+/* Return the list of gettable key exchange context parameters. */
+static const OSSL_PARAM *keyexch_gettable_ctx_params(void *ctx, void *provctx)
+{
+	static const OSSL_PARAM gettable_ctx_params[] = {
+		OSSL_PARAM_int(OSSL_EXCHANGE_PARAM_EC_ECDH_COFACTOR_MODE, NULL),
+		OSSL_PARAM_END
+	};
+
+	(void)ctx;
+	(void)provctx;
+	return gettable_ctx_params;
+}
+
+/* Set key exchange context parameters. */
+static int keyexch_set_ctx_params(void *ctx, const OSSL_PARAM params[])
+{
+	return p11_keyexch_ctx_set_params(ctx, params);
+}
+
+/* Return the list of settable key exchange context parameters (same as gettable). */
+static const OSSL_PARAM *keyexch_settable_ctx_params(void *ctx, void *provctx)
+{
+	return keyexch_gettable_ctx_params(ctx, provctx);
+}
+
+
+/******************************************************************************/
+/* Asymmetric kem functions                                                   */
+/******************************************************************************/
+
+/* Create and initialize asymmetric KEM context. */
+static void *kem_newctx(void *provctx)
+{
+	return p11_kem_ctx_new(provctx);
+}
+
+/* Free asymmetric KEM context. */
+
+static void kem_freectx(void *ctx)
+{
+	p11_kem_ctx_free(ctx);
+}
+
+/* Duplicate asymmetric KEM context. */
+static void *kem_dupctx(void *ctx)
+{
+	return p11_kem_ctx_dupctx(ctx);
+}
+
+/*
+ * Initialize an asymmetric KEM context for encapsulation using
+ * the recipient's public key.
+ */
+static int kem_encapsulate_init(void *ctx, void *provkey,
+	const OSSL_PARAM params[])
+{
+	return p11_kem_ctx_init(ctx, provkey, params);
+}
+
+/* Encapsulate a shared secret using an ML-KEM public key. */
+static int kem_encapsulate(void *ctx, unsigned char *out, size_t *outlen,
+	unsigned char *secret, size_t *secretlen)
+{
+	return p11_kem_ctx_encapsulate(ctx, out, outlen, secret, secretlen);
+}
+
+/*
+ * Initialise a context for an asymmetric decapsulation given a provider side
+ * asymmetric KEM context in the ctx parameter, a pointer to a provider key
+ * object in the provkey parameter, and a name of the algorithm.
+ */
+static int kem_decapsulate_init(void *ctx, void *provkey, const OSSL_PARAM params[])
+{
+	return p11_kem_ctx_init(ctx, provkey, params);
+}
+
+/* Perform the actual decapsulation. */
+static int kem_decapsulate(void *ctx, unsigned char *out, size_t *outlen,
+	const unsigned char *in, size_t inlen)
+{
+	return p11_kem_ctx_decapsulate(ctx, out, outlen, in, inlen);
+}
+
+/* Return the current asymmetric KEM context parameters. */
+static int kem_get_ctx_params(void *ctx, OSSL_PARAM params[])
+{
+	if (ctx == NULL)
+		return 0;
+
+	(void)params;
+	return 1;
+}
+
+/*
+ * Return the list of gettable asymmetric KEM context parameters.
+ * No parameters are currently recognised by built-in asymmetric kem algorithms.
+ */
+static const OSSL_PARAM *kem_gettable_ctx_params(void *ctx, void *provctx)
+{
+	static const OSSL_PARAM gettable[] = {
+		OSSL_PARAM_END
+	};
+
+	(void)ctx;
+	(void)provctx;
+	return gettable;
+}
+
+/*
+ * Set asymmetric KEM context parameters.
+ * OSSL_KEM_PARAM_IKME is not supported because PKCS#11 ML-KEM
+ * encapsulation uses randomness generated internally by the token.
+ * This parameter should not be used for purposes other than testing.
+ */
+static int kem_set_ctx_params(void *ctx, const OSSL_PARAM params[])
+{
+	if (ctx == NULL)
+		return 0;
+
+	(void)params;
+	return 1;
+}
+
+/*
+ * Return the list of settable asymmetric KEM context parameters.
+ * No parameters are currently recognised by built-in asymmetric kem algorithms.
+ */
+static const OSSL_PARAM *kem_settable_ctx_params(void *ctx, void *provctx)
+{
+	return kem_gettable_ctx_params(ctx, provctx);
 }
 
 /******************************************************************************/
@@ -1675,7 +1506,7 @@ static const OSSL_PARAM *store_settable_ctx_params(void *ctx)
 		OSSL_PARAM_END
 	};
 
-	(void)(ctx);
+	(void)ctx;
 	return settable_ctx_params;
 }
 

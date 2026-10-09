@@ -5,7 +5,7 @@
  * Portions Copyright (c) 2003 Kevin Stefanik (kstef@mtppi.org)
  * Copied/modified by Kevin Stefanik (kstef@mtppi.org) for the OpenSC
  * project 2003.
- * Copyright (c) 2016-2025 Michał Trojnara <Michal.Trojnara@stunnel.org>
+ * Copyright (c) 2016-2026 Michał Trojnara <Michal.Trojnara@stunnel.org>
  *
  * Licensed under the OpenSSL license (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -32,6 +32,9 @@
 #define PKCS11_ENGINE_NAME "pkcs11 engine"
 
 static int pkcs11_idx = -1;
+static int engine_method_idx = -1;
+static const int *engine_method_nids = NULL;
+static int engine_method_count = 0;
 
 /* The definitions for control commands specific to this engine */
 
@@ -130,6 +133,10 @@ static int engine_destroy(ENGINE *engine)
 
 	rv &= ENGINE_CTX_destroy(ctx);
 	ENGINE_set_ex_data(engine, pkcs11_idx, NULL);
+	if (engine_method_idx >= 0) {
+		OPENSSL_free(ENGINE_get_ex_data(engine, engine_method_idx));
+		ENGINE_set_ex_data(engine, engine_method_idx, NULL);
+	}
 	ERR_unload_ENG_strings();
 	return rv;
 }
@@ -175,12 +182,13 @@ static EVP_PKEY *load_privkey(ENGINE *engine, const char *s_key_id,
 		UI_METHOD *ui_method, void *ui_data)
 {
 	ENGINE_CTX *ctx;
-	EVP_PKEY *pkey;
 
 	ctx = ENGINE_CTX_get(engine);
 	if (!ctx)
 		return 0;
-	bind_helper_methods(engine);
+	if (!bind_helper_methods(engine) ||
+			!ENGINE_CTX_set_pkey_callback(ctx, engine))
+		return 0;
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
 	/*
 	 * A workaround for an OpenSSL bug affecting the handling of foreign
@@ -207,16 +215,7 @@ static EVP_PKEY *load_privkey(ENGINE *engine, const char *s_key_id,
 		}
 	}
 #endif
-	pkey = ENGINE_CTX_load_privkey(ctx, s_key_id, ui_method, ui_data);
-#ifdef EVP_F_EVP_PKEY_SET1_ENGINE
-	/* EVP_PKEY_set1_engine() is required for OpenSSL 1.1.x,
-	 * but otherwise setting pkey->engine breaks OpenSSL 1.0.2 */
-	if (pkey && !EVP_PKEY_set1_engine(pkey, engine)) {
-		EVP_PKEY_free(pkey);
-		pkey = NULL;
-	}
-#endif /* EVP_F_EVP_PKEY_SET1_ENGINE */
-	return pkey;
+	return ENGINE_CTX_load_privkey(ctx, s_key_id, ui_method, ui_data);
 }
 
 static int engine_ctrl(ENGINE *engine, int cmd, long i, void *p, void (*f) (void))
@@ -252,6 +251,69 @@ static int bind_helper(ENGINE *e)
 	}
 }
 
+/* Cache one method per key type and ENGINE; OpenSSL frees each method. */
+static int engine_method_init(void)
+{
+	const int *nids;
+	int count;
+
+	if (engine_method_idx >= 0)
+		return 1;
+
+	count = PKCS11_pkey_meths(NULL, NULL, &nids, 0);
+	engine_method_idx = ENGINE_get_ex_new_index(0, NULL, NULL, NULL, NULL);
+	if (engine_method_idx < 0)
+		return 0;
+	engine_method_nids = nids;
+	engine_method_count = count;
+	return 1;
+}
+
+static int pkcs11_engine_pkey_meths(ENGINE *e, EVP_PKEY_METHOD **pmeth,
+		const int **nids, int nid)
+{
+	EVP_PKEY_METHOD **methods, *method, *built;
+	int i;
+
+	if (!pmeth)
+		return PKCS11_pkey_meths(e, NULL, nids, 0);
+
+	*pmeth = NULL;
+	methods = ENGINE_get_ex_data(e, engine_method_idx);
+	if (methods == NULL) {
+		methods = OPENSSL_malloc((size_t)engine_method_count *
+			sizeof(*methods));
+		if (methods == NULL)
+			return 0;
+		memset(methods, 0, (size_t)engine_method_count * sizeof(*methods));
+		if (!ENGINE_set_ex_data(e, engine_method_idx, methods)) {
+			OPENSSL_free(methods);
+			return 0;
+		}
+	}
+
+	for (i = 0; i < engine_method_count; i++) {
+		if (engine_method_nids[i] != nid)
+			continue;
+
+		method = methods[i];
+		if (method == NULL) {
+			built = NULL;
+			if (!PKCS11_pkey_meths(e, &built, NULL, nid))
+				return 0;
+
+			method = methods[i];
+			if (method != NULL)
+				EVP_PKEY_meth_free(built);
+			else
+				method = methods[i] = built;
+		}
+		*pmeth = method;
+		return 1;
+	}
+	return 0;
+}
+
 /*
  * With OpenSSL 3.x, engines might be used because defined in openssl.cnf
  * which will cause problems
@@ -260,6 +322,9 @@ static int bind_helper(ENGINE *e)
 
 static int bind_helper_methods(ENGINE *e)
 {
+	if (!engine_method_init())
+		return 0;
+
 	if (
 #ifndef OPENSSL_NO_RSA
 			!ENGINE_set_RSA(e, PKCS11_get_rsa_method()) ||
@@ -277,7 +342,7 @@ static int bind_helper_methods(ENGINE *e)
 			!ENGINE_set_ECDH(e, PKCS11_get_ecdh_method()) ||
 #endif
 #endif /* OPENSSL_VERSION_NUMBER */
-			!ENGINE_set_pkey_meths(e, PKCS11_pkey_meths)) {
+			!ENGINE_set_pkey_meths(e, pkcs11_engine_pkey_meths)) {
 		return 0;
 	} else {
 		return 1;

@@ -3,7 +3,7 @@
  * Copyright (c) 2002 Juha Yrjölä
  * Copyright (c) 2002 Olaf Kirch
  * Copyright (c) 2003 Kevin Stefanik
- * Copyright (c) 2016-2025 Michał Trojnara <Michal.Trojnara@stunnel.org>
+ * Copyright (c) 2016-2026 Michał Trojnara <Michal.Trojnara@stunnel.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -28,6 +28,7 @@
 
 #include "util.h"
 #include "p11_pthread.h"
+#include <openssl/rand.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -53,6 +54,9 @@ struct util_ctx_st {
 	char *init_args;
 	UI_METHOD *ui_method;
 	void *ui_data;
+	int pkey_callback_type;
+	PKCS11_PKEY_CALLBACK pkey_callback;
+	void *pkey_callback_data;
 
 	/* Logging */
 	int debug_level;                             /* level of debug output */
@@ -127,6 +131,18 @@ int UTIL_CTX_set_ui_method(UTIL_CTX *ctx, UI_METHOD *ui_method, void *ui_data)
 	return 1;
 }
 
+int UTIL_CTX_set_pkey_callback(UTIL_CTX *ctx, int callback_type,
+		PKCS11_PKEY_CALLBACK callback, void *user_data)
+{
+	ctx->pkey_callback_type = callback_type;
+	ctx->pkey_callback = callback;
+	ctx->pkey_callback_data = callback ? user_data : NULL;
+	if (ctx->pkcs11_ctx && PKCS11_CTX_set_pkey_callback(ctx->pkcs11_ctx,
+			callback_type, callback, user_data) < 0)
+		return 0;
+	return 1;
+}
+
 static int util_ctx_enumerate_slots_unlocked(UTIL_CTX *ctx)
 {
 	/* PKCS11_update_slots() uses C_GetSlotList() via libp11 */
@@ -173,6 +189,12 @@ static int util_ctx_init_libp11(UTIL_CTX *ctx)
 	PKCS11_set_vlog_a_method(ctx->pkcs11_ctx, ctx->vlog);
 	PKCS11_CTX_init_args(ctx->pkcs11_ctx, ctx->init_args);
 	PKCS11_set_ui_method(ctx->pkcs11_ctx, ctx->ui_method, ctx->ui_data);
+	if (ctx->pkey_callback && PKCS11_CTX_set_pkey_callback(ctx->pkcs11_ctx,
+			ctx->pkey_callback_type, ctx->pkey_callback,
+			ctx->pkey_callback_data) < 0) {
+		UTIL_CTX_free_libp11(ctx);
+		return -1;
+	}
 	if (PKCS11_CTX_load(ctx->pkcs11_ctx, ctx->module) < 0) {
 		UTIL_CTX_log(ctx, LOG_ERR, "Unable to load module %s\n", ctx->module);
 		UTIL_CTX_free_libp11(ctx);
@@ -695,20 +717,25 @@ static int parse_uri_attr_len(UTIL_CTX *ctx,
 	return ret;
 }
 
+/*
+ * Decode a URI attribute into a newly allocated NUL-terminated string.
+ * URI decoding cannot increase the input length.
+ */
 static int parse_uri_attr(UTIL_CTX *ctx,
-		const char *attr, int attrlen, char **field)
+		const char *attr, size_t attrlen, char **field)
 {
 	int ret = 1;
-	size_t outlen = attrlen + 1;
-	char *out = OPENSSL_malloc(outlen);
+	size_t outlen = attrlen;
+	char *out;
 
-	if (!out)
+	out = OPENSSL_malloc(outlen + 1); /* reserve 1 byte for NUL terminator */
+	if (out == NULL)
 		return 0;
 
 	ret = parse_uri_attr_len(ctx, attr, attrlen, out, &outlen);
 
 	if (ret) {
-		out[outlen] = 0;
+		out[outlen] = '\0';
 		*field = out;
 	} else {
 		OPENSSL_free(out);
@@ -716,7 +743,6 @@ static int parse_uri_attr(UTIL_CTX *ctx,
 
 	return ret;
 }
-
 
 static int read_from_file(UTIL_CTX *ctx,
 	const char *path, char *field, size_t *field_len)
@@ -752,7 +778,7 @@ static int read_from_file(UTIL_CTX *ctx,
 }
 
 static int parse_pin_source(UTIL_CTX *ctx,
-		const char *attr, int attrlen, char *field,
+		const char *attr, size_t attrlen, char *field,
 		size_t *field_len)
 {
 	char *val;
@@ -803,30 +829,30 @@ static int parse_pkcs11_uri(UTIL_CTX *ctx,
 
 		if (!strncmp(p, "model=", 6)) {
 			p += 6;
-			rv = parse_uri_attr(ctx, p, (int)(end - p), &tok->model);
+			rv = parse_uri_attr(ctx, p, (size_t)(end - p), &tok->model);
 		} else if (!strncmp(p, "manufacturer=", 13)) {
 			p += 13;
-			rv = parse_uri_attr(ctx, p, (int)(end - p), &tok->manufacturer);
+			rv = parse_uri_attr(ctx, p, (size_t)(end - p), &tok->manufacturer);
 		} else if (!strncmp(p, "token=", 6)) {
 			p += 6;
-			rv = parse_uri_attr(ctx, p, (int)(end - p), &tok->label);
+			rv = parse_uri_attr(ctx, p, (size_t)(end - p), &tok->label);
 		} else if (!strncmp(p, "serial=", 7)) {
 			p += 7;
-			rv = parse_uri_attr(ctx, p, (int)(end - p), &tok->serialnr);
+			rv = parse_uri_attr(ctx, p, (size_t)(end - p), &tok->serialnr);
 		} else if (!strncmp(p, "object=", 7)) {
 			p += 7;
-			rv = parse_uri_attr(ctx, p, (int)(end - p), &newlabel);
+			rv = parse_uri_attr(ctx, p, (size_t)(end - p), &newlabel);
 		} else if (!strncmp(p, "id=", 3)) {
 			p += 3;
-			rv = parse_uri_attr_len(ctx, p, (int)(end - p), id, id_len);
+			rv = parse_uri_attr_len(ctx, p, (size_t)(end - p), id, id_len);
 			id_set = 1;
 		} else if (!strncmp(p, "pin-value=", 10)) {
 			p += 10;
-			rv = pin_set ? 0 : parse_uri_attr_len(ctx, p, (int)(end - p), pin, pin_len);
+			rv = pin_set ? 0 : parse_uri_attr_len(ctx, p, (size_t)(end - p), pin, pin_len);
 			pin_set = 1;
 		} else if (!strncmp(p, "pin-source=", 11)) {
 			p += 11;
-			rv = pin_set ? 0 : parse_pin_source(ctx, p, (int)(end - p), pin, pin_len);
+			rv = pin_set ? 0 : parse_pin_source(ctx, p, (size_t)(end - p), pin, pin_len);
 			pin_set = 1;
 		} else if (!strncmp(p, "type=", 5) || !strncmp(p, "object-type=", 12)) {
 			p = strchr(p, '=') + 1;
@@ -903,6 +929,7 @@ static int util_ctx_parse_uri(UTIL_CTX *ctx, PARSED *parsed,
 			n = parse_pkcs11_uri(ctx, object_uri, &match_tok,
 				parsed->obj_id, &parsed->obj_id_len, tmp_pin, &tmp_pin_len, &parsed->obj_label);
 			if (!n) {
+				OPENSSL_cleanse(tmp_pin, sizeof(tmp_pin));
 				UTIL_CTX_log(ctx, LOG_ERR,
 					"The %s ID is not a valid PKCS#11 URI\n"
 					"The PKCS#11 URI format is defined by RFC7512\n",
@@ -912,9 +939,11 @@ static int util_ctx_parse_uri(UTIL_CTX *ctx, PARSED *parsed,
 			if (tmp_pin_len > 0 && tmp_pin[0] != 0) {
 				tmp_pin[tmp_pin_len] = 0;
 				if (!UTIL_CTX_set_pin(ctx, tmp_pin)) {
+					OPENSSL_cleanse(tmp_pin, sizeof(tmp_pin));
 					goto cleanup;
 				}
 			}
+			OPENSSL_cleanse(tmp_pin, sizeof(tmp_pin));
 		} else {
 			n = parse_slot_id_string(ctx, object_uri, &parsed->slot_nr,
 				parsed->obj_id, &parsed->obj_id_len, &parsed->obj_label);
@@ -1250,6 +1279,40 @@ static PKCS11_CERT *cert_cmp(PKCS11_CERT *a, PKCS11_CERT *b)
 	}
 }
 
+static void log_cert(UTIL_CTX *ctx, unsigned int index,
+		PKCS11_CERT *cert, const char *which)
+{
+	char *hexbuf;
+	char *expiry;
+
+	hexbuf = dump_hex((unsigned char *)cert->id, cert->id_len);
+	expiry = dump_expiry(cert);
+
+	if (which != NULL) {
+		UTIL_CTX_log(ctx, LOG_NOTICE,
+			"Returning %s certificate:%s%s%s%s%s%s\n", which,
+			hexbuf ? " id=" : "",
+			hexbuf ? hexbuf : "",
+			cert->label ? " label=" : "",
+			cert->label ? cert->label : "",
+			expiry ? " expiry=" : "",
+			expiry ? expiry : "");
+	} else {
+		UTIL_CTX_log(ctx, LOG_NOTICE,
+			"  %2u    %s%s%s%s%s%s\n", index,
+			hexbuf ? " id=" : "",
+			hexbuf ? hexbuf : "",
+			cert->label ? " label=" : "",
+			cert->label ? cert->label : "",
+			expiry ? " expiry=" : "",
+			expiry ? expiry : "");
+	}
+
+	OPENSSL_free(hexbuf);
+	OPENSSL_free(expiry);
+}
+
+/* Find and select a certificate matching the requested object ID or label. */
 static void *match_cert(UTIL_CTX *ctx, PKCS11_TOKEN *tok,
 		const char *obj_id, size_t obj_id_len, const char *obj_label)
 {
@@ -1257,8 +1320,8 @@ static void *match_cert(UTIL_CTX *ctx, PKCS11_TOKEN *tok,
 	PKCS11_CERT cert_template = {0};
 	unsigned int m, cert_count;
 	const char *which;
-	char *hexbuf, *expiry;
 
+	/* Build a certificate template from the requested label and ID. */
 	errno = 0;
 	cert_template.label = obj_label ? OPENSSL_strdup(obj_label) : NULL;
 	if (errno != 0) {
@@ -1275,6 +1338,7 @@ static void *match_cert(UTIL_CTX *ctx, PKCS11_TOKEN *tok,
 		cert_template.id_len = obj_id_len;
 	}
 
+	/* Enumerate certificates matching the template. */
 	if (PKCS11_enumerate_certs_ext(tok, &cert_template, &certs, &cert_count)) {
 		UTIL_CTX_log(ctx, LOG_ERR, "Unable to enumerate certificates\n");
 		goto cleanup;
@@ -1285,21 +1349,13 @@ static void *match_cert(UTIL_CTX *ctx, PKCS11_TOKEN *tok,
 	}
 	UTIL_CTX_log(ctx, LOG_NOTICE, "Found %u certificate%s:\n", cert_count, cert_count == 1 ? "" : "s");
 	if (obj_id_len != 0 || obj_label) {
+		/* Select the matching certificate with the longest validity
+		 * period when the caller supplied an ID or label. */
 		which = "longest expiry matching";
 		for (m = 0; m < cert_count; m++) {
 			PKCS11_CERT *k = certs + m;
 
-			hexbuf = dump_hex((unsigned char *)k->id, k->id_len);
-			expiry = dump_expiry(k);
-			UTIL_CTX_log(ctx, LOG_NOTICE, "  %2u    %s%s%s%s%s%s\n", m + 1,
-				hexbuf ? " id=" : "",
-				hexbuf ? hexbuf : "",
-				k->label ? " label=" : "",
-				k->label ? k->label : "",
-				expiry ? " expiry=" : "",
-				expiry ? expiry : "");
-			OPENSSL_free(hexbuf);
-			OPENSSL_free(expiry);
+			log_cert(ctx, m + 1, k, NULL);
 
 			if (obj_label && obj_id_len != 0) {
 				if (k->label && strcmp(k->label, obj_label) == 0 &&
@@ -1319,21 +1375,13 @@ static void *match_cert(UTIL_CTX *ctx, PKCS11_TOKEN *tok,
 			}
 		}
 	} else {
+		/* Without explicit selection criteria, prefer the first certificate
+		 * with a nonempty ID and otherwise use the first certificate. */
 		which = "first (with id present)";
 		for (m = 0; m < cert_count; m++) {
 			PKCS11_CERT *k = certs + m;
 
-			hexbuf = dump_hex((unsigned char *)k->id, k->id_len);
-			expiry = dump_expiry(k);
-			UTIL_CTX_log(ctx, LOG_NOTICE, "  %2u    %s%s%s%s%s%s\n", m + 1,
-				hexbuf ? " id=" : "",
-				hexbuf ? hexbuf : "",
-				k->label ? " label=" : "",
-				k->label ? k->label : "",
-				expiry ? " expiry=" : "",
-				expiry ? expiry : "");
-			OPENSSL_free(hexbuf);
-			OPENSSL_free(expiry);
+			log_cert(ctx, m + 1, k, NULL);
 
 			if (!selected_cert && k->id && *k->id) {
 				selected_cert = k; /* Use the first certificate with nonempty id */
@@ -1345,18 +1393,9 @@ static void *match_cert(UTIL_CTX *ctx, PKCS11_TOKEN *tok,
 		}
 	}
 
+	/* Log the certificate selected for return. */
 	if (selected_cert) {
-		hexbuf = dump_hex((unsigned char *)selected_cert->id, selected_cert->id_len);
-		expiry = dump_expiry(selected_cert);
-		UTIL_CTX_log(ctx, LOG_NOTICE, "Returning %s certificate:%s%s%s%s%s%s\n", which,
-			hexbuf ? " id=" : "",
-			hexbuf ? hexbuf : "",
-			selected_cert->label ? " label=" : "",
-			selected_cert->label ? selected_cert->label : "",
-			expiry ? " expiry=" : "",
-			expiry ? expiry : "");
-		OPENSSL_free(hexbuf);
-		OPENSSL_free(expiry);
+		log_cert(ctx, 0, selected_cert, which);
 	} else {
 		UTIL_CTX_log(ctx, LOG_ERR, "No matching certificate returned.\n");
 	}
@@ -1579,6 +1618,94 @@ int UTIL_CTX_keygen(UTIL_CTX *ctx, PKCS11_KGEN_ATTRS *kg_attrs)
 	}
 
 	return 1;
+}
+
+/*
+ * Generate a key pair on the token uniquely selected by the PKCS#11 URI.
+ * The URI also specifies the generated key label and ID. If the ID is empty
+ * or omitted, generate a random ID shared by the public and private objects.
+ * Returns an EVP_PKEY for the generated private key, or NULL on error.
+ */
+EVP_PKEY *UTIL_CTX_generate_key(UTIL_CTX *ctx, const char *uri, int algorithm,
+	unsigned int param)
+{
+	PARSED parsed = {0};
+	PKCS11_SLOT *slot = NULL;
+	PKCS11_KEY *pkey = NULL;
+	EVP_PKEY *key = NULL;
+	unsigned char generated_id[32];
+	unsigned char *id;
+	size_t id_len;
+	size_t i;
+	unsigned int count = 0;
+	int rv;
+
+	if (ctx == NULL || uri == NULL || strncasecmp(uri, "pkcs11:", 7) != 0)
+		return NULL;
+
+	pthread_mutex_lock(&ctx->lock);
+
+	if (util_ctx_init_libp11(ctx))
+		goto end;
+
+	if (!util_ctx_parse_uri(ctx, &parsed, "key", uri))
+		goto end;
+
+	/*
+	 * Key generation requires exactly one initialized token.
+	 * This avoids generating a key on an arbitrary matching token.
+	 */
+	for (i = 0; i < parsed.matched_count; i++) {
+		PKCS11_SLOT *candidate = parsed.matched_slots[i];
+
+		if (candidate == NULL || candidate->token == NULL ||
+				!candidate->token->initialized)
+			continue;
+
+		slot = candidate;
+		count++;
+	}
+
+	if (count != 1 || slot == NULL) {
+		UTIL_CTX_log(ctx, LOG_ERR,
+			"PKCS#11 URI must match exactly one initialized token\n");
+		goto end;
+	}
+
+	if (!util_ctx_login(ctx, slot, slot->token, ctx->ui_method, ctx->ui_data))
+		goto end;
+
+	id = (unsigned char *)parsed.obj_id;
+	id_len = parsed.obj_id_len;
+	if (id_len == 0) {
+		if (RAND_bytes(generated_id, sizeof(generated_id)) != 1) {
+			UTIL_CTX_log(ctx, LOG_ERR, "Failed to generate a key ID\n");
+			goto end;
+		}
+		id = generated_id;
+		id_len = sizeof(generated_id);
+	}
+
+	rv = PKCS11_generate_key_ext(slot->token, algorithm, param,
+		parsed.obj_label, id, id_len, &pkey);
+	if (rv < 0 || pkey == NULL) {
+		UTIL_CTX_log(ctx, LOG_ERR,
+			"Failed to generate a key pair on the token. Error code: %d\n",
+			rv);
+		goto end;
+	}
+
+	key = PKCS11_get_private_key(pkey);
+	if (key == NULL)
+		UTIL_CTX_log(ctx, LOG_ERR,
+			"Failed to create EVP_PKEY for the generated private key\n");
+
+end:
+	pthread_mutex_unlock(&ctx->lock);
+	OPENSSL_free(parsed.obj_label);
+	OPENSSL_free(parsed.matched_slots);
+	OPENSSL_free(parsed.obj_id);
+	return key;
 }
 
 /* vim: set noexpandtab: */

@@ -5,7 +5,7 @@ AC_PREREQ([2.69])
 # When bumping versions see also the LT version numbers below.
 define([PACKAGE_VERSION_MAJOR], [0])
 define([PACKAGE_VERSION_MINOR], [4])
-define([PACKAGE_VERSION_FIX], [19])
+define([PACKAGE_VERSION_FIX], [22])
 define([PACKAGE_SUFFIX], [_git])
 
 AC_INIT([libp11],[PACKAGE_VERSION_MAJOR.PACKAGE_VERSION_MINOR.PACKAGE_VERSION_FIX[]PACKAGE_SUFFIX])
@@ -14,6 +14,14 @@ AC_CONFIG_HEADERS([src/config.h])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CANONICAL_TARGET
 AM_INIT_AUTOMAKE([subdir-objects])
+
+# Automake's cpio fallback extracts files without preserving mtimes.  When
+# distcheck makes the extracted source tree read-only, that can make generated
+# files such as configure look older than their inputs and trigger unwanted
+# autoreconf attempts in the read-only tree.
+case $am__untar in
+	cpio\ *) am__untar="$am__untar -m" ;;
+esac
 
 LIBP11_VERSION_MAJOR="PACKAGE_VERSION_MAJOR"
 LIBP11_VERSION_MINOR="PACKAGE_VERSION_MINOR"
@@ -80,8 +88,8 @@ AM_CONDITIONAL([LIBP11_BUILD_ENGINE], [test x$LIBP11_BUILD_ENGINE = xyes])
 # the openssl version we link to. If the ABI is broken on a later
 # release, we should either stick to supporting a single openssl ABI
 # or bump the LT_OLDEST version sufficiently to avoid clashes.
-LIBP11_LT_REVISION="4"
-LIBP11_LT_CURRENT="10"
+LIBP11_LT_REVISION="0"
+LIBP11_LT_CURRENT="13"
 LIBP11_LT_AGE="$((${LIBP11_LT_CURRENT}-${LIBP11_LT_OLDEST}))"
 
 gl_LD_VERSION_SCRIPT

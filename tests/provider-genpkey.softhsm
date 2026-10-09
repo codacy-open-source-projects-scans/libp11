@@ -1,0 +1,217 @@
+#!/bin/bash
+
+# Copyright © 2026 Mobi - Com Polska Sp. z o.o.
+# Author: Małgorzata Olszówka <Malgorzata.Olszowka@stunnel.org>
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+outdir="output.$$"
+
+# Load common test functions
+. "${srcdir}/common.sh"
+
+if [[ "${OPENSSL_VERSION}" =~ ^[012].* ]]; then
+	echo "Skipping provider tests with OpenSSL ${OPENSSL_VERSION}"
+	rm -rf "$outdir"
+	exit 77
+fi
+
+# Initialize SoftHSM DB
+init_db
+
+# Create token
+init_card "libp11-0"
+
+# Ensure the use of the locally built provider
+unset OPENSSL_ENGINES
+export OPENSSL_MODULES="../src/.libs/"
+export PKCS11_MODULE_PATH=${MODULE}
+
+echo "OPENSSL_MODULES=${OPENSSL_MODULES}"
+echo "PKCS11_MODULE_PATH=${PKCS11_MODULE_PATH}"
+
+# Load OpenSSL settings
+. ${srcdir}/openssl-settings.sh
+
+# Restore OpenSSL settings
+trap cleanup EXIT
+
+GENPKEY_ID=1
+GENERATED_IDS=" "
+
+genpkey()
+{
+	local algorithm="$1" label="$2" id
+	shift 2
+
+	id=$(printf '%%01%%02%%03%%%02x' "${GENPKEY_ID}")
+	GENPKEY_ID=$((GENPKEY_ID + 1))
+	genpkey_with_id "$algorithm" "$label" "id=${id};" "${id//%/}" "$@" || return 1
+	genpkey_with_id "$algorithm" "${label}-auto" "" "" "$@" || return 1
+	genpkey_with_id "$algorithm" "${label}-empty" "id=;" "" "$@"
+}
+
+genpkey_with_id()
+{
+	local algorithm="$1" label="$2" id_attr="$3" expected_id="$4"
+	local objects ids public_id private_id type
+	shift 4
+
+	echo "Generating ${algorithm} key"
+
+	# TODO: use -noout for non-exportable token keys to avoid a false genpkey failure
+	# Load default first to avoid SoftHSM recursively selecting pkcs11prov
+	# for its internal Ed25519/Ed448 key generation on OpenSSL 3.x.
+	${OPENSSL} genpkey \
+		-provider default -provider pkcs11prov \
+		-propquery "?provider=pkcs11prov" \
+		-algorithm "${algorithm}" \
+		-pkeyopt "pkcs11_uri:pkcs11:token=libp11-0;object=${label};${id_attr}pin-value=${PIN}" \
+		"$@" || true
+
+	# Inspect both objects even if private-key output failed. The pair must
+	# share a nonempty ID, preserving explicit IDs and generating new ones.
+	for type in pubkey privkey; do
+		objects=$(${PKCS11_TOOL} --module "${MODULE}" --login --pin "${PIN}" \
+			--list-objects --type "$type" --label "$label") || return 1
+		# Older OpenSC versions ignore --label when listing objects.
+		# IDs may be hex, colon-separated hex, or decimal followed by
+		# parenthesized hex for short IDs.
+		ids=$(printf '%s\n' "$objects" | awk -v label="$label" '
+		/^[^[:space:]]/ { matches = 0 }
+		/^[[:space:]]*label:/ {
+			value = $0
+			sub(/^[[:space:]]*label:[[:space:]]*/, "", value)
+			matches = value == label
+		}
+		matches && /^[[:space:]]*ID:/ {
+			id = $3 ~ /^\(0x/ ? $3 : $2
+			sub(/^\(0x/, "", id)
+			gsub(/[:)]/, "", id)
+			print tolower(id)
+		}')
+		if [[ ! "$ids" =~ ^[0-9a-f]+$ ]]; then
+			echo "Expected exactly one ${type} key with a nonempty ID: ${label}"
+			return 1
+		fi
+		if [[ "$type" == pubkey ]]; then
+			public_id="$ids"
+		else
+			private_id="$ids"
+		fi
+	done
+	if [[ "$public_id" != "$private_id" ]]; then
+		echo "Public/private key IDs differ: ${label}"
+		return 1
+	fi
+	if [[ -n "$expected_id" ]]; then
+		if [[ "$public_id" != "$expected_id" ]]; then
+			echo "Explicit key ID changed: ${label}"
+			return 1
+		fi
+	else
+		if [[ ${#public_id} -ne 64 || "$GENERATED_IDS" == *" $public_id "* ]]; then
+			echo "Invalid or duplicate generated key ID: ${label}"
+			return 1
+		fi
+		GENERATED_IDS+="$public_id "
+	fi
+
+	echo "${algorithm} key generation succeeded."
+	echo
+	return 0
+}
+
+if has_mechanism RSA-PKCS-KEY-PAIR-GEN; then
+	genpkey RSA rsa-genpkey -pkeyopt rsa_keygen_bits:2048 || exit 1
+else
+	echo "Skipping RSA: mechanism not supported."
+	echo
+fi
+
+if has_mechanism ECDSA-KEY-PAIR-GEN; then
+	genpkey EC ec-genpkey -pkeyopt ec_paramgen_curve:P-256 || exit 1
+else
+	echo "Skipping EC: mechanism not supported."
+	echo
+fi
+
+if has_mechanism EC-EDWARDS-KEY-PAIR-GEN; then
+	genpkey ED25519 ed25519-genpkey || exit 1
+	genpkey ED448 ed448-genpkey || exit 1
+else
+	echo "Skipping ED25519/ED448: mechanism not supported."
+	echo
+fi
+
+if has_mechanism EC-MONTGOMERY-KEY-PAIR-GEN || has_mechanism mechtype-0x1056; then
+	genpkey X25519 x25519-genpkey || exit 1
+	genpkey X448 x448-genpkey || exit 1
+else
+	echo "Skipping X25519/X448: mechanism not supported."
+	echo
+fi
+
+if has_mechanism ML-DSA-KEY-PAIR-GEN ||	has_mechanism mechtype-0x1C; then
+	genpkey ML-DSA-44 mldsa44-genpkey || exit 1
+	genpkey ML-DSA-65 mldsa65-genpkey || exit 1
+	genpkey ML-DSA-87 mldsa87-genpkey || exit 1
+else
+	echo "Skipping ML-DSA: mechanism not supported."
+	echo
+fi
+
+if has_mechanism ML-KEM-KEY-PAIR-GEN ||	has_mechanism mechtype-0xF; then
+	genpkey ML-KEM-512 mlkem512-genpkey || exit 1
+	genpkey ML-KEM-768 mlkem768-genpkey || exit 1
+	genpkey ML-KEM-1024 mlkem1024-genpkey || exit 1
+else
+	echo "Skipping ML-KEM: mechanism not supported."
+	echo
+fi
+
+if has_mechanism SLH-DSA-KEY-PAIR-GEN || has_mechanism mechtype-0x2D; then
+	genpkey SLH-DSA-SHA2-128s slhdsa-sha2-128s-genpkey || exit 1
+	genpkey SLH-DSA-SHA2-128f slhdsa-sha2-128f-genpkey || exit 1
+	genpkey SLH-DSA-SHA2-192s slhdsa-sha2-192s-genpkey || exit 1
+	genpkey SLH-DSA-SHA2-192f slhdsa-sha2-192f-genpkey || exit 1
+	genpkey SLH-DSA-SHA2-256s slhdsa-sha2-256s-genpkey || exit 1
+	genpkey SLH-DSA-SHA2-256f slhdsa-sha2-256f-genpkey || exit 1
+
+	genpkey SLH-DSA-SHAKE-128s slhdsa-shake-128s-genpkey || exit 1
+	genpkey SLH-DSA-SHAKE-128f slhdsa-shake-128f-genpkey || exit 1
+	genpkey SLH-DSA-SHAKE-192s slhdsa-shake-192s-genpkey || exit 1
+	genpkey SLH-DSA-SHAKE-192f slhdsa-shake-192f-genpkey || exit 1
+	genpkey SLH-DSA-SHAKE-256s slhdsa-shake-256s-genpkey || exit 1
+	genpkey SLH-DSA-SHAKE-256f slhdsa-shake-256f-genpkey || exit 1
+else
+	echo "Skipping SLH-DSA: mechanism not supported."
+	echo
+fi
+
+if  has_mechanism PQC-FALCON || has_mechanism mechtype-0x80010025; then
+	genpkey FALCON-512 falcon512-genpkey || exit 1
+	genpkey FALCON-1024 falcon1024-genpkey || exit 1
+else
+	echo "Skipping FALCON: mechanism not supported."
+	echo
+fi
+
+list_objects
+
+rm -rf "$outdir"
+
+exit 0
+
+# vim: set noexpandtab:

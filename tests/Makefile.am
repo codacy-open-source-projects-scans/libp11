@@ -1,4 +1,4 @@
-EXTRA_DIST = engines.cnf.in common.sh openssl-settings.sh helpers_prov.h eddsa_common.h
+EXTRA_DIST = engines.cnf.in common.sh openssl-settings.sh helpers_prov.h oneshot_common.h
 
 AM_CFLAGS = $(OPENSSL_CFLAGS)
 AM_CPPFLAGS = \
@@ -21,6 +21,7 @@ check_PROGRAMS = \
 	rsa-pss-sign-prov \
 	rsa-oaep \
 	rsa-oaep-prov \
+	rsa-software-key \
 	check-privkey \
 	check-privkey-prov \
 	dup-key \
@@ -28,10 +29,17 @@ check_PROGRAMS = \
 	check-all-prov \
 	rsa-keygen \
 	ec-keygen \
+	ec-duplicate-key \
+	ec-derive \
+	ec-derive-prov \
 	ed25519-keygen \
 	ed448-keygen \
 	ed25519-keygen-prov \
-	ed448-keygen-prov
+	ed448-keygen-prov \
+	mldsa87-keygen-prov \
+	mlkem768-keygen-prov \
+	session-pool-test \
+	session-pool-stress
 dist_check_SCRIPTS = \
 	rsa-testpkcs11.softhsm \
 	rsa-testfork.softhsm \
@@ -40,15 +48,20 @@ dist_check_SCRIPTS = \
 	rsa-evp-sign.softhsm \
 	rsa-pss-sign.softhsm \
 	rsa-oaep.softhsm \
+	rsa-software-key.softhsm \
 	rsa-check-privkey.softhsm \
 	rsa-cert-store.softhsm \
 	rsa-keygen.softhsm \
+	ec-duplicate-key.softhsm \
 	ec-testfork.softhsm \
 	ec-evp-sign.softhsm \
 	ec-check-privkey.softhsm \
 	ec-cert-store.softhsm \
 	ec-copy.softhsm \
 	ec-keygen.softhsm \
+	ec-derive.softhsm \
+	session-pool-test.sh \
+	session-pool-stress.softhsm \
 	ed25519-keygen.softhsm \
 	ed448-keygen.softhsm \
 	fork-change-slot.softhsm \
@@ -65,24 +78,37 @@ dist_check_SCRIPTS = \
 	provider-ec-check-privkey.softhsm \
 	provider-ec-check-all.softhsm \
 	provider-ec-copy.softhsm \
+	provider-ec-derive.softhsm \
 	provider-ed25519-check-privkey.softhsm \
 	provider-ed448-check-privkey.softhsm \
 	provider-ed25519-keygen.softhsm \
 	provider-ed448-keygen.softhsm \
+	provider-ed25519-copy.softhsm \
+	provider-mldsa87-check-privkey.softhsm \
+	provider-mldsa87-keygen.softhsm \
+	provider-mldsa87-copy.softhsm \
+	provider-mlkem768-keygen.softhsm \
+	provider-mlkem768-copy.softhsm \
 	provider-fork-change-slot.softhsm \
 	provider-case-insensitive.softhsm \
 	provider-pkcs11-uri-without-token.softhsm \
-	provider-search-all-matching-tokens.softhsm
+	provider-search-all-matching-tokens.softhsm \
+	provider-genpkey.softhsm \
+	provider-ambiguous-public-key.softhsm
 dist_check_DATA = \
 	rsa-cert.der rsa-privkey.der rsa-pubkey.der \
 	ec-cert.der ec-privkey.der ec-pubkey.der \
 	ed25519-cert.der ed25519-privkey.der ed25519-pubkey.der \
-	ed448-cert.der ed448-privkey.der ed448-pubkey.der
+	ed448-cert.der ed448-privkey.der ed448-pubkey.der \
+	mldsa87-cert.der mldsa87-privkey.der mldsa87-pubkey.der \
+	mlkem768-privkey.der mlkem768-pubkey.der
 
-ed25519_keygen_SOURCES = ed25519-keygen.c eddsa_common.c
-ed448_keygen_SOURCES = ed448-keygen.c eddsa_common.c
-ed25519_keygen_prov_SOURCES = ed25519-keygen-prov.c helpers_prov.c eddsa_common.c
-ed448_keygen_prov_SOURCES = ed448-keygen-prov.c helpers_prov.c eddsa_common.c
+ed25519_keygen_SOURCES = ed25519-keygen.c oneshot_common.c
+ed448_keygen_SOURCES = ed448-keygen.c oneshot_common.c
+ed25519_keygen_prov_SOURCES = ed25519-keygen-prov.c helpers_prov.c oneshot_common.c
+ed448_keygen_prov_SOURCES = ed448-keygen-prov.c helpers_prov.c oneshot_common.c
+mldsa87_keygen_prov_SOURCES = mldsa87-keygen-prov.c helpers_prov.c oneshot_common.c
+mlkem768_keygen_prov_SOURCES = mlkem768-keygen-prov.c helpers_prov.c
 evp_sign_prov_SOURCES = evp-sign-prov.c helpers_prov.c
 fork_change_slot_prov_SOURCES = fork-change-slot-prov.c helpers_prov.c
 dup_key_prov_SOURCES = dup-key-prov.c helpers_prov.c
@@ -90,6 +116,9 @@ check_privkey_prov_SOURCES = check-privkey-prov.c helpers_prov.c
 rsa_pss_sign_prov_SOURCES = rsa-pss-sign-prov.c helpers_prov.c
 rsa_oaep_prov_SOURCES = rsa-oaep-prov.c helpers_prov.c
 check_all_prov_SOURCES = check-all-prov.c helpers_prov.c
+ec_derive_prov_SOURCES = ec-derive-prov.c helpers_prov.c
+session_pool_test_SOURCES = session-pool-test.c session-pool-under-test.c
+session_pool_test_LDADD = $(OPENSSL_LIBS)
 
 TESTS = $(dist_check_SCRIPTS)
 

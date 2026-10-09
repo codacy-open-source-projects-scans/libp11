@@ -257,7 +257,7 @@ error:
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
 #define ASN1_STRING_get0_data(os) ((os)->data)
-#define ASN1_STRING_length(x) ((os)->length)
+#define ASN1_STRING_length(os) ((os)->length)
 #endif
 
 /* Retrieve EC point from key into ec
@@ -325,7 +325,7 @@ static EC_KEY *pkcs11_get_ec(PKCS11_OBJECT_private *key)
 	 * Continue even if it fails, as the sign operation does not need
 	 * it if the PKCS#11 module or the hardware can figure this out
 	 */
-	if (pkcs11_get_session(slot, 0, &session)) {
+	if (pkcs11_session_pool_acquire(slot, 0, &session)) {
 		EC_KEY_free(ec);
 		return NULL;
 	}
@@ -335,7 +335,7 @@ static EC_KEY *pkcs11_get_ec(PKCS11_OBJECT_private *key)
 		no_point = pkcs11_get_point_associated(ec, key, CKO_PUBLIC_KEY, session);
 	if (no_point && key->object_class == CKO_PRIVATE_KEY) /* Retry with the certificate */
 		no_point = pkcs11_get_point_associated(ec, key, CKO_CERTIFICATE, session);
-	pkcs11_put_session(slot, session);
+	pkcs11_session_pool_release(slot, session);
 
 	if (key->object_class == CKO_PRIVATE_KEY && EC_KEY_get0_private_key(ec) == NULL) {
 		BIGNUM *bn = BN_new();
@@ -387,11 +387,10 @@ static EVP_PKEY *pkcs11_get_evp_key_ec(PKCS11_OBJECT_private *key)
 	ec = pkcs11_get_ec(key);
 	if (!ec)
 		return NULL;
+
 	pk = EVP_PKEY_new();
-	if (!pk) {
-		EC_KEY_free(ec);
-		return NULL;
-	}
+	if (!pk)
+		goto error;
 
 	if (key->object_class == CKO_PRIVATE_KEY) {
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER)
@@ -400,58 +399,28 @@ static EVP_PKEY *pkcs11_get_evp_key_ec(PKCS11_OBJECT_private *key)
 		ECDSA_set_method(ec, PKCS11_get_ecdsa_method());
 		ECDH_set_method(ec, PKCS11_get_ecdh_method());
 #endif
-		/* This creates a new EC_KEY object which requires its own key object reference */
+		/* Keep the PKCS11_OBJECT_private alive while referenced from EC ex_data.
+		 * With EC_KEY_METHOD, pkcs11_ec_finish() releases this reference;
+		 * legacy ECDSA/ECDH methods have no equivalent finish hook. */
 		key = pkcs11_object_ref(key);
 		pkcs11_set_ex_data_ec(ec, key);
 	}
 	/* TODO: Retrieve the ECDSA private key object attributes instead,
 	 * unless the key has the "sensitive" attribute set */
 
-	EVP_PKEY_set1_EC_KEY(pk, ec); /* Also increments the ec ref count */
-	EC_KEY_free(ec); /* Drops our reference to it */
+	if (EVP_PKEY_set1_EC_KEY(pk, ec) != 1) /* Also increments the ec ref count */
+		goto error;
 
+	EC_KEY_free(ec); /* Drops our reference to it */
 	return pk;
+
+error:
+	EVP_PKEY_free(pk);
+	EC_KEY_free(ec);
+	return NULL;
 }
 
 /********** ECDSA signing */
-
-/* Signature size is the issue, will assume the caller has a big buffer! */
-/* No padding or other stuff needed.  We can call PKCS11 from here */
-static int pkcs11_ecdsa_sign(const unsigned char *msg, unsigned int msg_len,
-		unsigned char *sigret, unsigned int *siglen, PKCS11_OBJECT_private *key)
-{
-	int rv;
-	PKCS11_SLOT_private *slot = key->slot;
-	PKCS11_CTX_private *ctx = slot->ctx;
-	CK_SESSION_HANDLE session;
-	CK_MECHANISM mechanism;
-	CK_ULONG ck_sigsize;
-
-	ck_sigsize = *siglen;
-
-	memset(&mechanism, 0, sizeof(mechanism));
-	mechanism.mechanism = CKM_ECDSA;
-
-	if (pkcs11_get_session(slot, 0, &session))
-		return -1;
-
-	rv = CRYPTOKI_call(ctx,
-		C_SignInit(session, &mechanism, key->object));
-	if (!rv && key->always_authenticate == CK_TRUE)
-		rv = pkcs11_authenticate(key, session);
-	if (!rv)
-		rv = CRYPTOKI_call(ctx,
-			C_Sign(session, (CK_BYTE *)msg, msg_len, sigret, &ck_sigsize));
-	pkcs11_put_session(slot, session);
-
-	if (rv) {
-		CKRerr(CKR_F_PKCS11_ECDSA_SIGN, rv);
-		return -1;
-	}
-	*siglen = ck_sigsize;
-
-	return ck_sigsize;
-}
 
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER)
 
@@ -483,14 +452,10 @@ static void pkcs11_ec_finish(EC_KEY *ec)
 static ECDSA_SIG *pkcs11_ecdsa_sign_sig(const unsigned char *dgst, int dlen,
 		const BIGNUM *kinv, const BIGNUM *rp, EC_KEY *ec)
 {
-	unsigned char sigret[512]; /* HACK for now */
-	ECDSA_SIG *sig;
+	unsigned char sigret[512]; /* existing temporary buffer size */
+	size_t siglen = sizeof sigret;
 	PKCS11_OBJECT_private *key;
-	unsigned int siglen;
-	BIGNUM *r, *s, *order;
-
-	(void)kinv; /* Precomputed values are not used for PKCS#11 */
-	(void)rp; /* Precomputed values are not used for PKCS#11 */
+	BIGNUM *order;
 
 	key = pkcs11_get_ex_data_ec(ec);
 	if (check_object_fork(key) < 0) {
@@ -517,25 +482,7 @@ static ECDSA_SIG *pkcs11_ecdsa_sign_sig(const unsigned char *dgst, int dlen,
 		}
 		BN_free(order);
 	}
-
-	siglen = sizeof sigret;
-	if (pkcs11_ecdsa_sign(dgst, dlen, sigret, &siglen, key) <= 0)
-		return NULL;
-
-	r = BN_bin2bn(sigret, siglen/2, NULL);
-	s = BN_bin2bn(sigret + siglen/2, siglen/2, NULL);
-	sig = ECDSA_SIG_new();
-	if (!sig)
-		return NULL;
-#if OPENSSL_VERSION_NUMBER >= 0x10100000L || ( defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER >= 0x3050000fL )
-	ECDSA_SIG_set0(sig, r, s);
-#else
-	BN_free(sig->r);
-	sig->r = r;
-	BN_free(sig->s);
-	sig->s = s;
-#endif
-	return sig;
+	return pkcs11_ec_sign_raw(key, sigret, &siglen, dgst, dlen);
 }
 
 /********** ECDH key derivation */
@@ -591,81 +538,66 @@ static void pkcs11_ecdh_params_free(CK_ECDH1_DERIVE_PARAMS *parms)
  * could also be supported, and the secret key object could be returned.
  */
 static int pkcs11_ecdh_derive(unsigned char **out, size_t *outlen,
-		const int key_len,
-		const unsigned long ecdh_mechanism,
-		const void *ec_params,
-		void *outnewkey,
-		PKCS11_OBJECT_private *key)
+	const int key_len, const unsigned long ecdh_mechanism,
+	const void *ec_params, void *outnewkey, PKCS11_OBJECT_private *key)
 {
-	PKCS11_SLOT_private *slot = key->slot;
-	PKCS11_CTX_private *ctx = slot->ctx;
-	CK_SESSION_HANDLE session;
-	CK_MECHANISM mechanism;
-	int rv;
+	const CK_ECDH1_DERIVE_PARAMS *params;
+	unsigned char *secret = NULL;
+	size_t secretlen;
+	int cofactor_mode;
 
-	CK_BBOOL _true = TRUE;
-	CK_BBOOL _false = FALSE;
-	CK_OBJECT_HANDLE newkey = CK_INVALID_HANDLE;
-	CK_OBJECT_CLASS newkey_class = CKO_SECRET_KEY;
-	CK_KEY_TYPE newkey_type = CKK_GENERIC_SECRET;
-	CK_ULONG newkey_len = key_len;
-	CK_OBJECT_HANDLE *tmpnewkey = (CK_OBJECT_HANDLE *)outnewkey;
-	CK_ATTRIBUTE newkey_template[] = {
-		{CKA_TOKEN, &_false, sizeof(_false)}, /* session only object */
-		{CKA_CLASS, &newkey_class, sizeof(newkey_class)},
-		{CKA_KEY_TYPE, &newkey_type, sizeof(newkey_type)},
-		{CKA_VALUE_LEN, &newkey_len, sizeof(newkey_len)},
-		{CKA_SENSITIVE, &_false, sizeof(_false)},
-		{CKA_EXTRACTABLE, &_true, sizeof(_true)},
-		{CKA_DERIVE, &_true, sizeof(_true)},
-	};
-
-	memset(&mechanism, 0, sizeof(mechanism));
-	mechanism.mechanism = ecdh_mechanism;
-	mechanism.pParameter = (void *)ec_params;
-	switch (ecdh_mechanism) {
-		case CKM_ECDH1_DERIVE:
-		case CKM_ECDH1_COFACTOR_DERIVE:
-			mechanism.ulParameterLen = sizeof(CK_ECDH1_DERIVE_PARAMS);
-			break;
-#if 0
-		/* TODO */
-		case CK_ECMQV_DERIVE_PARAMS:
-			mechanism.ulParameterLen = sizeof(CK_ECMQV_DERIVE_PARAMS);
-			break;
-#endif
-		default:
-			P11err(P11_F_PKCS11_ECDH_DERIVE, P11_R_NOT_SUPPORTED);
-			return -1;
-	}
-
-	if (pkcs11_get_session(slot, 0, &session))
+	if (key == NULL || out == NULL || outlen == NULL ||
+			ec_params == NULL || key_len <= 0)
 		return -1;
 
-	rv = CRYPTOKI_call(ctx, C_DeriveKey(session, &mechanism, key->object,
-		newkey_template, sizeof(newkey_template)/sizeof(*newkey_template), &newkey));
-	if (rv != CKR_OK)
-		goto error;
-
-	/* Return the value of the secret key and/or the object handle of the secret key */
-	if (out && outlen) { /* pkcs11_ec_ckey only asks for the value */
-		if (pkcs11_getattr_alloc(ctx, session, newkey, CKA_VALUE, out, outlen)) {
-			CRYPTOKI_call(ctx, C_DestroyObject(session, newkey));
-			goto error;
-		}
+	/* Returning the temporary derived key object is not supported by the
+	 * shared EVP helper. pkcs11_ec_ckey() only asks for the value. */
+	if (outnewkey != NULL) {
+		P11err(P11_F_PKCS11_ECDH_DERIVE, P11_R_NOT_SUPPORTED);
+		return -1;
 	}
-	if (tmpnewkey) /* For future use (not used by pkcs11_ec_ckey) */
-		*tmpnewkey = newkey;
-	else /* Destroy the temporary key */
-		CRYPTOKI_call(ctx, C_DestroyObject(session, newkey));
 
-	pkcs11_put_session(slot, session);
+	switch (ecdh_mechanism) {
+	case CKM_ECDH1_DERIVE:
+		cofactor_mode = 0;
+		break;
+	case CKM_ECDH1_COFACTOR_DERIVE:
+		cofactor_mode = 1;
+		break;
+#if 0
+	/* TODO
+	 * Elliptic Curve Menezes–Qu–Vanstone key agreement
+	 * ECMQV needs CK_ECMQV_DERIVE_PARAMS and two key pairs per party.
+	 * Keep disabled until we have a token exposing CKM_ECMQV_DERIVE
+	 * for interoperability testing. */
+	case CKM_ECMQV_DERIVE:
+		break;
+#endif
+	default:
+		P11err(P11_F_PKCS11_ECDH_DERIVE, P11_R_NOT_SUPPORTED);
+		return -1;
+	}
 
+	params = (const CK_ECDH1_DERIVE_PARAMS *)ec_params;
+	if (params->pPublicData == NULL || params->ulPublicDataLen == 0)
+		return -1;
+
+	secretlen = (size_t)key_len;
+	secret = OPENSSL_malloc(secretlen);
+	if (secret == NULL)
+		return -1;
+
+	/* Return the value of the secret key. */
+	if (pkcs11_evp_pkey_ecdh_derive(key,
+			params->pPublicData, params->ulPublicDataLen,
+			cofactor_mode, secret, &secretlen) <= 0) {
+		pkcs11_clear_free(secret, (size_t)key_len);
+		return -1;
+	}
+
+	*out = secret;
+	*outlen = secretlen;
 	return 0;
-error:
-	pkcs11_put_session(slot, session);
-	CKRerr(CKR_F_PKCS11_ECDH_DERIVE, rv);
-	return -1;
 }
 
 static int pkcs11_ecdh_compute_key(unsigned char **buf, size_t *buflen,

@@ -23,6 +23,9 @@ outdir="output.$$"
 
 PRIVATE_KEY="pkcs11:token=libp11-0;id=%01%02%03%04;object=server-key-0;type=private;pin-value=${PIN}"
 
+# EC tests only require the private key object, as the public key can be
+# reconstructed from the EC point and curve parameters.
+
 # Do the token initialization
 init_token "ec" "1" "libp11" ${ID} "server-key" "privkey" "" ""
 

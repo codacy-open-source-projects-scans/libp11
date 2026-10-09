@@ -1,6 +1,6 @@
 /* libp11, a simple layer on top of PKCS#11 API
  * Copyright (C) 2005 Olaf Kirch <okir@lst.de>
- * Copyright © 2025 Mobi - Com Polska Sp. z o.o.
+ * Copyright © 2025-2026 Mobi - Com Polska Sp. z o.o.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -52,27 +52,48 @@ int ERR_get_CKR_code(void);
  * of this project to expose the entire PKCS#11 functionality.
  */
 
+/* opaque type declarations */
+typedef struct pkcs11_object_private PKCS11_OBJECT_private;
+typedef struct pkcs11_slot_private PKCS11_SLOT_private;
+typedef struct pkcs11_ctx_private PKCS11_CTX_private;
+
+/* forward type declarations */
+typedef struct PKCS11_key_st PKCS11_KEY;
+typedef struct PKCS11_cert_st PKCS11_CERT;
+typedef struct PKCS11_token_st PKCS11_TOKEN;
+typedef struct PKCS11_slot_st PKCS11_SLOT;
+typedef struct PKCS11_ctx_st PKCS11_CTX;
+typedef struct PKCS11_ec_kgen_st PKCS11_EC_KGEN;
+typedef struct PKCS11_nid_kgen_st PKCS11_NID_KGEN;
+typedef struct PKCS11_rsa_kgen_st PKCS11_RSA_KGEN;
+typedef struct PKCS11_params PKCS11_params;
+typedef struct PKCS11_kgen_attrs_st PKCS11_KGEN_ATTRS;
+
+/* Legacy EC-specific name retained for compatibility.
+ * Use PKCS11_NID_KGEN for new code. */
+#define PKCS11_EDDSA_KGEN PKCS11_NID_KGEN
+
 /** PKCS11 key object (public or private) */
-typedef struct PKCS11_key_st {
+struct PKCS11_key_st {
 	char *label;
 	unsigned char *id;
 	size_t id_len;
 	unsigned char isPrivate;	/**< private key present? */
 	unsigned char needLogin;	/**< login to read private key? */
-	void *_private;
-} PKCS11_KEY;
+	PKCS11_OBJECT_private *_private;
+};
 
 /** PKCS11 certificate object */
-typedef struct PKCS11_cert_st {
+struct PKCS11_cert_st {
 	char *label;
 	unsigned char *id;
 	size_t id_len;
 	X509 *x509;
-	void *_private;
-} PKCS11_CERT;
+	PKCS11_OBJECT_private *_private;
+};
 
 /** PKCS11 token: smart card or USB key */
-typedef struct PKCS11_token_st {
+struct PKCS11_token_st {
 	char *label;
 	char *manufacturer;
 	char *model;
@@ -91,50 +112,53 @@ typedef struct PKCS11_token_st {
 	unsigned char soPinFinalTry;
 	unsigned char soPinLocked;
 	unsigned char soPinToBeChanged;
-	struct PKCS11_slot_st *slot;
-} PKCS11_TOKEN;
+	PKCS11_SLOT *slot;
+};
 
 /** PKCS11 slot: card reader */
-typedef struct PKCS11_slot_st {
+struct PKCS11_slot_st {
 	char *manufacturer;
 	char *description;
 	unsigned char removable;
 	PKCS11_TOKEN *token;	/**< NULL if no token present */
-	void *_private;
-} PKCS11_SLOT;
+	PKCS11_SLOT_private *_private;
+};
 
 /** PKCS11 context */
-typedef struct PKCS11_ctx_st {
+struct PKCS11_ctx_st {
 	char *manufacturer;
 	char *description;
-	void *_private;
-} PKCS11_CTX;
+	PKCS11_CTX_private *_private;
+};
 
-typedef struct PKCS11_ec_kgen_st {
+struct PKCS11_ec_kgen_st {
 	const char *curve;
-} PKCS11_EC_KGEN;
+};
 
-typedef struct PKCS11_eddsa_kgen_st {
-	int nid;                 /* NID_ED25519 or NID_ED448 */
-} PKCS11_EDDSA_KGEN;
+struct PKCS11_nid_kgen_st {
+	int nid;
+};
 
-typedef struct PKCS11_rsa_kgen_st {
+struct PKCS11_rsa_kgen_st {
 	unsigned int bits;
-} PKCS11_RSA_KGEN;
+};
 
-typedef struct PKCS11_params {
+struct PKCS11_params {
 	unsigned char extractable;
 	unsigned char sensitive;
-} PKCS11_params;
+};
 
-typedef struct PKCS11_kgen_attrs_st {
+struct PKCS11_kgen_attrs_st {
 	/* Key generation type from OpenSSL. Given the union below this should
 	 * be either EVP_PKEY_EC or EVP_PKEY_RSA or EVP_PKEY_ED25519 or EVP_PKEY_ED448
+	 * EVP_PKEY_ML_DSA_* or EVP_PKEY_SLH_DSA_*. or
+	 * EVP_PKEY_FALCON512 or EVP_PKEY_FALCON1024
 	 */
 	int type;
 	union {
 		PKCS11_EC_KGEN *ec;
 		PKCS11_EDDSA_KGEN *eddsa;
+		PKCS11_NID_KGEN *nid;
 		PKCS11_RSA_KGEN *rsa;
 	} kgen;
 	const char *token_label;
@@ -142,10 +166,22 @@ typedef struct PKCS11_kgen_attrs_st {
 	const unsigned char *key_id;
 	size_t id_len;
 	const PKCS11_params *key_params;
-} PKCS11_KGEN_ATTRS;
+};
 
 /** PKCS11 ASCII logging callback */
 typedef void (*PKCS11_VLOG_A_CB)(int, const char *, va_list);
+
+/**
+ * Callback invoked for an EVP_PKEY returned by libp11
+ *
+ * The key arguments are borrowed and must not be freed by the callback.
+ * The callback may modify the EVP_PKEY and must return 0 on success or -1
+ * on error.
+ */
+typedef int (*PKCS11_PKEY_CALLBACK)(PKCS11_KEY *, EVP_PKEY *, void *);
+
+/** Callback type for PKCS11_get_private_key() */
+#define PKCS11_PKEY_CALLBACK_GET_PRIVATE_KEY 1
 
 /**
  * Create a new libp11 context with specified flags
@@ -162,6 +198,23 @@ extern PKCS11_CTX *PKCS11_CTX_new_ex(int flags);
  * @return an allocated context
  */
 extern PKCS11_CTX *PKCS11_CTX_new(void);
+
+/**
+ * Set a callback for EVP_PKEY objects returned by this context
+ *
+ * The callback and its user data must remain valid until they are replaced,
+ * unset, or the context is freed. Callback registration must not be changed
+ * concurrently with key retrieval.
+ *
+ * @param ctx context allocated by PKCS11_CTX_new()
+ * @param callback_type one of PKCS11_PKEY_CALLBACK_* types
+ * @param callback callback function, or NULL to unset it
+ * @param user_data opaque callback data
+ * @retval 0 success
+ * @retval -1 unsupported callback type or invalid context
+ */
+extern int PKCS11_CTX_set_pkey_callback(PKCS11_CTX *ctx,
+	int callback_type, PKCS11_PKEY_CALLBACK callback, void *user_data);
 
 /**
  * Specify any private PKCS#11 module initialization args, if necessary
@@ -463,6 +516,16 @@ ECDH_METHOD *PKCS11_get_ecdh_method(void);
 #endif
 
 #if OPENSSL_VERSION_NUMBER < 0x40000000L
+/**
+ * Return supported key types or create a legacy OpenSSL pkey method.
+ *
+ * A method returned through @p pmeth is newly allocated and owned by the
+ * caller.  Do not install this function directly with ENGINE_set_pkey_meths():
+ * OpenSSL expects repeated callback calls to return the same method, while
+ * this function returns a fresh method to avoid sharing methods between
+ * ENGINE instances.  Direct callback use therefore leaks methods.  Use the
+ * bundled pkcs11 engine, which caches methods per ENGINE.
+ */
 int PKCS11_pkey_meths(ENGINE *e, EVP_PKEY_METHOD **pmeth,
 		const int **nids, int nid);
 #else /* OPENSSL_VERSION_NUMBER < 0x40000000L */
@@ -509,6 +572,11 @@ extern int PKCS11_generate_key(PKCS11_TOKEN *token,
 	int algorithm, unsigned int bits_or_nid,
 	char *label, unsigned char *id, size_t id_len);
 
+extern int PKCS11_generate_key_ext(PKCS11_TOKEN *token,
+	int algorithm, unsigned int bits_or_nid,
+	char *label, unsigned char *id, size_t id_len,
+	PKCS11_KEY **ret_key);
+
 /* Get the RSA key modulus size (in bytes) */
 extern int PKCS11_get_key_size(PKCS11_KEY *);
 
@@ -537,16 +605,31 @@ extern int PKCS11_verify(int type,
 /* Perform a private-key operation using a PKCS#11-backed EVP_PKEY */
 extern int PKCS11_evp_pkey_sign(EVP_PKEY *pkey, int type, const char *mdname,
 	const int pad_mode, const int salt_len, const char *mgf1_mdname,
-	unsigned char *oaep_label, const int oaep_labellen,
 	unsigned char *sig, size_t *siglen,
+	const unsigned char *tbs, size_t tbslen);
+
+/* Perform a public-key operation using a PKCS#11-backed EVP_PKEY */
+int PKCS11_evp_pkey_verify(EVP_PKEY *pkey, int type,
+	const unsigned char *sig, size_t siglen,
 	const unsigned char *tbs, size_t tbslen);
 
 /* Perform a private-key decryption operation using a PKCS#11-backed EVP_PKEY */
 extern int PKCS11_evp_pkey_decrypt(EVP_PKEY *pk, int type, const char *mdname,
 	const int pad_mode, const char *mgf1_mdname,
-	unsigned char *oaep_label, const int oaep_labellen,
+	unsigned char *oaep_label, size_t oaep_labellen,
 	unsigned char *sig, size_t *siglen,
-	size_t *outsize, const unsigned char *in, size_t inlen);
+	const unsigned char *in, size_t inlen);
+
+/* Perform a private-key derive operation using a PKCS#11-backed EVP_PKEY */
+extern int PKCS11_evp_pkey_derive(EVP_PKEY *pk, int type,
+	const unsigned char *peer_pub, size_t peer_pub_len,
+	int cofactor_mode, unsigned char *secret, size_t *secretlen);
+
+/* Perform a private-key decapsulate operation using a PKCS#11-backed EVP_PKEY */
+extern int PKCS11_evp_pkey_decapsulate(EVP_PKEY *pk, int type,
+	unsigned char *out, size_t *outlen,
+	const unsigned char *in, size_t inlen);
+
 #endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
 
 /* Encrypts data using the private key */

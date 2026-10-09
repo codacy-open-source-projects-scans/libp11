@@ -76,6 +76,8 @@ fi
 
 # Load openssl settings
 TEMP_LD_LIBRARY_PATH=${LD_LIBRARY_PATH}
+TEMP_OPENSSL_CONF=${OPENSSL_CONF-}
+TEMP_OPENSSL_CONF_SET=${OPENSSL_CONF+x}
 . ${srcdir}/openssl-settings.sh
 
 OPENSSL_VERSION=$(./openssl_version | cut -d ' ' -f 2)
@@ -118,6 +120,12 @@ else
 fi
 
 mkdir -p ${outdir}
+
+# Do not let system-wide OpenSSL configuration activate an installed
+# PKCS#11 provider instead of the provider built for this test run.
+: >"${outdir}/openssl.cnf"
+export OPENSSL_CONF="${outdir}/openssl.cnf"
+echo "OPENSSL_CONF=${OPENSSL_CONF}"
 
 sed -e "s|@MODULE_PATH@|${MODULE}|g" -e \
 	"s|@ENGINE_PATH@|../src/.libs/pkcs11${SHARED_EXT}|g" \
@@ -226,6 +234,21 @@ generate_rsa_key_pair () {
 	fi
 }
 
+# Generate an EC key pair with derive usage on the prime256v1 curve
+generate_ec_derive_key_pair () {
+	local obj_label="$1"
+	local token_label="$2"
+	local obj_id="${3:-${ID}}"
+
+	echo "* Generating an EC derive key pair on the token ${token_label}"
+	pkcs11-tool --login --pin ${PIN} --module ${MODULE} --id ${obj_id} \
+		--keypairgen --key-type "EC:prime256v1" --usage-derive \
+		--label ${obj_label} --token-label ${token_label}
+	if [[ $? -ne 0 ]]; then
+		exit 1
+	fi
+}
+
 # Do the token initialization
 init_token () {
 	local key_type="$1"
@@ -312,4 +335,16 @@ list_objects () {
 # Cleanup test environment
 cleanup() {
 	export LD_LIBRARY_PATH="${TEMP_LD_LIBRARY_PATH}"
+	if [[ -n "${TEMP_OPENSSL_CONF_SET}" ]]; then
+		export OPENSSL_CONF="${TEMP_OPENSSL_CONF}"
+	else
+		unset OPENSSL_CONF
+	fi
+}
+
+# Return success if the PKCS#11 token supports the given mechanism.
+has_mechanism()
+{
+	${PKCS11_TOOL} --module "${MODULE}" \
+		--list-mechanisms 2>/dev/null | grep -qw "$1"
 }

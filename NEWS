@@ -1,7 +1,62 @@
 NEWS for Libp11 -- History of user visible changes
 
-New in 0.4.19; unreleased
+New in 0.4.22; unreleased
+
+New in 0.4.21; 2026-09-07; Michał Trojnara
+* Added PKCS#11 provider support for `openssl genpkey` (Małgorzata Olszówka)
+* Added the PKCS11_generate_key_ext() API (Małgorzata Olszówka)
+* Added the PKCS11_CTX_set_pkey_callback() API (Michał Trojnara)
+* Removed incorrect `fips=yes` properties from provider algorithms
+  (Małgorzata Olszówka)
+* Isolated ENGINE EVP_PKEY methods from unrelated OpenSSL keys
+  (Michał Trojnara)
+* Fixed ENGINE EVP_PKEY method races and lifetime issues (Małgorzata Olszówka,
+  Michał Trojnara). Direct use of PKCS11_pkey_meths() as an ENGINE callback now
+  leaks methods; use the bundled engine.
+* Fixed public-key association for generated key pairs with duplicate CKA_ID
+  values (Małgorzata Olszówka)
+* Added all-zero shared-secret checks for X25519 and X448 (Małgorzata Olszówka)
+* Fixed a provider EC public-point NULL dereference with affected OpenSSL 3.x
+  versions (Małgorzata Olszówka)
+* Fixed building with OpenSSL 1.0.2 (Michał Trojnara)
+* Improved Git build and RSA-OAEP documentation (Małgorzata Olszówka)
+
+New in 0.4.20; 2026-08-08; Michał Trojnara
+* Added PKCS#11 3.2 interface discovery and updated the bundled header
+  to version 3.2 (Małgorzata Olszówka)
+* Added PKCS#11 provider support for ML-KEM-512, ML-KEM-768 and ML-KEM-1024
+  key generation, encapsulation and decapsulation (Małgorzata Olszówka)
+* Added the PKCS11_evp_pkey_decapsulate() API (Małgorzata Olszówka)
+* Added provider signature AlgorithmIdentifier support, including RSA-PSS
+  parameters and correct default salt length handling (Małgorzata Olszówka)
+* Fixed RSA-PSS salt length parsing and spurious OpenSSL errors
+  (Małgorzata Olszówka)
+* Fixed session-pool races and deadlocks during concurrent key generation and
+  cryptographic operations (Michał Trojnara)
+* Fixed key-cache and OpenSSL 1.x RSA object use-after-free bugs
+  (Michał Trojnara)
+* Fixed provider EC parameter lifetime handling and resource leaks during EC,
+  RSA, EdDSA and XDH operations and context cleanup (Michał Trojnara)
+* Fixed installation of p11_ver.h, which is required by p11_err.h (botantony)
+
+New in 0.4.19; 2026-07-21; Michał Trojnara
 * Define LIBP11_VERSION_NUMBER (Michał Trojnara)
+* Added native KEYMGMT, SIGNATURE and ASYM_CIPHER operations to the PKCS#11
+  provider, enabling OpenSSL 4.x support and improving RSA interoperability
+  (Małgorzata Olszówka)
+* Added support for ML-DSA, SLH-DSA and FALCON key generation, signing and
+  verification (Małgorzata Olszówka)
+* Added PQC key generation examples and provider tests (Małgorzata Olszówka)
+* Added PKCS#11 provider support for ECDH, X25519 and X448 key exchange,
+  including X25519 and X448 key generation (Małgorzata Olszówka)
+* Improved Ed25519 and Ed448 public-key resolution with certificate fallback
+  (Małgorzata Olszówka)
+* Fixed use-after-free crashes after enumerating additional PKCS#11 keys
+  (Małgorzata Olszówka)
+* Fixed a potential out-of-bounds write while parsing PKCS#11 URI attributes
+  (Małgorzata Olszówka)
+* Fixed PKCS#11 session, attribute and key-reference leaks
+  (Małgorzata Olszówka)
 
 New in 0.4.18; 2026-02-16; Michał Trojnara
 * Support for RSA-PSS and RSA-OAEP using keys retrieved using the
